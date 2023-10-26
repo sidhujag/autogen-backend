@@ -35,11 +35,21 @@ class Agent(BaseModel):
     user_id: str = ""
     description: str = ""
     system_message: str = ""
-    function_names: List[str] = []
+    functions: List[Dict] = []
     category: str = ""
     agents: List[Dict] = [] 
     invitees: List[str] = []
 
+class AgentModel(BaseModel):
+    name: str = ""
+    user_id: str = ""
+    description: str = ""
+    system_message: str = ""
+    function_names: List[str] = []
+    category: str = ""
+    agents: List[Dict] = [] 
+    invitees: List[str] = []
+    
 class AddFunctionInput(BaseModel):
     name: str
     user_id: str
@@ -105,19 +115,16 @@ class FunctionsAndAgentsMetadata:
             end = time.time()
             return f"FunctionsAndAgentsMetadata: get_function exception {e}\n{traceback.format_exc()}", end-start
 
-    async def pull_function_names(self, user_id: str, function_names: List[str]) -> List[str]:
+    async def pull_functions(self, user_id: str, function_names: List[str]) -> List[AddFunctionModel]:
         start = time.time()
         if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
             await self.initialize()
         try:
             doc_cursor = await self.rate_limiter.execute(self.funcs_collection.find, {"name": {"$in": function_names}, "user_id": user_id})
-            if doc_cursor is None:
-                end = time.time()
-                return None, end-start
             docs = await doc_cursor.to_list(length=1000)
-            retrieved_function_names = [doc['name'] for doc in docs if 'name' in doc]
+            function_models = [AddFunctionModel(**doc) for doc in docs]
             end = time.time()
-            return retrieved_function_names, end-start
+            return function_models, end-start
         except Exception as e:
             end = time.time()
             return f"FunctionsAndAgentsMetadata: get_function exception {e}\n{traceback.format_exc()}", end-start
@@ -144,7 +151,7 @@ class FunctionsAndAgentsMetadata:
         end = time.time()
         return "success", end-start
     
-    async def get_agent(self, user_id: str, agent_name: str, resolve_functions: bool = True) -> Agent:
+    async def get_agent(self, user_id: str, agent_name: str, resolve_functions: bool = True):
         start = time.time()
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
@@ -153,11 +160,15 @@ class FunctionsAndAgentsMetadata:
             if doc is None:
                 end = time.time()
                 return Agent(), end-start
-            agent = Agent(**doc)
+            agent_model = AgentModel(**doc)
             if resolve_functions:
-                agent.function_names = await self.pull_function_names(agent.function_names)
-            end = time.time()
-            return agent, end-start
+                agent = Agent(agent_model)
+                agent.functions = await self.pull_functions(agent_model.function_names)
+                end = time.time()
+                return agent, end-start
+            else:
+                end = time.time()
+                return agent_model, end-start
         except Exception as e:
             end = time.time()
             return f"FunctionsAndAgentsMetadata: get_agent exception {e}\n{traceback.format_exc()}", end-start
@@ -168,7 +179,7 @@ class FunctionsAndAgentsMetadata:
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
         try:
-            agent: Agent = await self.get_agent(agent_upsert.user_id, agent_upsert.name)
+            agent: AgentModel = await self.get_agent(agent_upsert.user_id, agent_upsert.name, False)
             # if it is not a global agent then only let the owner upsert it
             if agent.user_id != "" and agent_upsert.user_id != agent.user_id:
                 end = time.time()
