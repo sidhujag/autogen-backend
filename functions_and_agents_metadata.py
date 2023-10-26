@@ -15,6 +15,7 @@ from typing import List, Dict, Optional, Union
 
 class GetAgentModel(BaseModel):
     name: str
+    user_id: str
 
 class GetFunctionsModel(BaseModel):
     functions: List[str]
@@ -151,12 +152,12 @@ class FunctionsAndAgentsMetadata:
         end = time.time()
         return "success", end-start
     
-    async def get_agent(self, user_id: str, agent_name: str, resolve_functions: bool = True):
+    async def get_agent(self, agent_input: GetAgentModel, resolve_functions: bool = True):
         start = time.time()
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
         try:
-            doc = await self.rate_limiter.execute(self.agents_collection.find_one, {"name": agent_name, "user_id": user_id})
+            doc = await self.rate_limiter.execute(self.agents_collection.find_one, {"name": agent_input.name, "user_id": agent_input.user_id})
             if doc is None:
                 end = time.time()
                 return Agent(), end-start
@@ -179,7 +180,7 @@ class FunctionsAndAgentsMetadata:
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
         try:
-            agent: AgentModel = await self.get_agent(agent_upsert.user_id, agent_upsert.name, False)
+            agent: AgentModel = await self.get_agent(GetAgentModel(agent_upsert.name, agent_upsert.user_id), False)
             # if it is not a global agent then only let the owner upsert it
             if agent.user_id != "" and agent_upsert.user_id != agent.user_id:
                 end = time.time()

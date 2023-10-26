@@ -80,9 +80,15 @@ async def getAgent(agent_input: GetAgentModel):
     if result is not None:
         logging.info(f'Found agent in cache, result {result}')
         return {'response': result, 'elapsed_time': 0}
-    response, elapsed_time = await functions_and_agents_metadata.get_agent(agent_input.name)
+    response, elapsed_time = await functions_and_agents_metadata.get_agent(agent_input)
     if isinstance(response, Agent) and len(response.name) > 0:
         agentcache[agent_input.name] = response
+    # try to find it globally
+    else:
+        agent_input.user_id = ""
+        response, elapsed_time = await functions_and_agents_metadata.get_agent(agent_input)
+        if isinstance(response, Agent) and len(response.name) > 0:
+            agentcache[agent_input.name] = response 
     return {'response': response, 'elapsed_time': elapsed_time}
 
 @app.post('/upsert_agent/')
