@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from discover_functions_manager import DiscoverFunctionsManager, DiscoverFunctionsModel
 from discover_agents_manager import DiscoverAgentsManager, DiscoverAgentsModel
-from functions_and_agents_metadata import FunctionsAndAgentsMetadata, AddFunctionModel, AddFunctionInput, GetAgentModel, UpsertAgentModel, UpsertAgentInput
+from functions_and_agents_metadata import FunctionsAndAgentsMetadata, AddFunctionModel, AddFunctionInput, Agent, GetAgentModel, UpsertAgentModel, UpsertAgentInput
 from cachetools import TTLCache
 from rate_limiter import RateLimiter, SyncRateLimiter
 rate_limiter = RateLimiter(rate=5, period=1)  # Allow 5 tasks per second
@@ -24,7 +24,7 @@ logging.basicConfig(filename=LOGFILE_PATH, filemode='w',
 
 discover_functions_manager = DiscoverFunctionsManager(rate_limiter, rate_limiter_sync)
 discover_agents_manager = DiscoverAgentsManager(rate_limiter, rate_limiter_sync)
-functions_and_agents_metadata = FunctionsAndAgentsMetadata(rate_limiter, rate_limiter_sync)
+functions_and_agents_metadata = FunctionsAndAgentsMetadata()
 
 agentcache = TTLCache(maxsize=16384, ttl=36000)
 discoverfunctioncache = TTLCache(maxsize=16384, ttl=36000)
@@ -37,7 +37,12 @@ async def discoverFunctions(function_input: DiscoverFunctionsModel):
     if result is not None:
         logging.info(f'Found functions in cache, result {result}')
         return {'response': result, 'elapsed_time': 0}
-    logging.info(f'Processing Action Item: {function_input.action_items}')
+    function_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming']
+
+    if function_input.category not in function_types:
+        return {'response': f'Invalid category {function_input.category}, must be one of {function_types}'}
+
+    logging.info(f'Discovering function: {function_input.query}')
     result, elapsed_time = await discover_functions_manager.pull_functions(function_input)
     if len(result) > 0:
         discoverfunctioncache[function_input] = result
@@ -50,7 +55,6 @@ async def addFunction(function_output: AddFunctionInput):
     functions = {}
     function_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming']
 
-    function_output.category = function_output.category.lower().replace(' ', '_')
     if function_output.category not in function_types:
         return {'response': f'Invalid category for function {function_output.name}, must be one of {function_types}'}
 
@@ -76,8 +80,8 @@ async def getAgent(agent_input: GetAgentModel):
     if result is not None:
         logging.info(f'Found agent in cache, result {result}')
         return {'response': result, 'elapsed_time': 0}
-    response, elapsed_time = functions_and_agents_metadata.get_agent(agent_input.name)
-    if len(response["name"]) > 0:
+    response, elapsed_time = await functions_and_agents_metadata.get_agent(agent_input.name)
+    if isinstance(response, Agent) and len(response.name) > 0:
         agentcache[agent_input.name] = response
     return {'response': response, 'elapsed_time': elapsed_time}
 
@@ -88,7 +92,6 @@ async def upsertAgent(agent_input: UpsertAgentInput):
     agents = {}
     agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'groups']
 
-    agent_input.category = agent_input.category.lower().replace(' ', '_')
     if agent_input.category not in agent_types:
         return {'response': f'Invalid category for agent {agent_input.name}, must be one of {agent_types}'}
 
@@ -112,6 +115,11 @@ async def upsertAgent(agent_input: UpsertAgentInput):
 @app.post('/discover_agents/')
 async def discoverAgents(agent_input: DiscoverAgentsModel):
     """Endpoint to upsert an agent."""
+    agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'groups']
+
+    if agent_input.category not in agent_types:
+        return {'response': f'Invalid category {agent_input.category}, must be one of {agent_types}'}
+
     if agent_input.query:
         result = discoveragentscache.get(agent_input.query)
         if result is not None:

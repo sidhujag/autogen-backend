@@ -202,7 +202,7 @@ class DiscoverAgentsManager:
             for agent_type in agent_types:
                 if agent_type in agents:
                     transformed_agents = self.transform(
-                        user_id, agents[agent_type], agent_type.replace('_', ' ').title())
+                        user_id, agents[agent_type], agent_type)
                     all_docs.extend(transformed_agents)
             ids = [doc.metadata["id"] for doc in all_docs]
             await self.rate_limiter.execute(memory.base_retriever.vectorstore.aadd_documents, all_docs, ids=ids)

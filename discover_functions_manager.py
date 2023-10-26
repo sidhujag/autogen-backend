@@ -214,7 +214,7 @@ class DiscoverFunctionsManager:
             for func_type in function_types:
                 if func_type in functions:
                     transformed_functions = self.transform(
-                        user_id, functions[func_type], func_type.replace('_', ' ').title())
+                        user_id, functions[func_type], func_type)
                     all_docs.extend(transformed_functions)
             ids = [doc.metadata["id"] for doc in all_docs]
             await self.rate_limiter.execute(memory.base_retriever.vectorstore.aadd_documents, all_docs, ids=ids)
