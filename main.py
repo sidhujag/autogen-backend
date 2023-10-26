@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from discover_functions_manager import DiscoverFunctionsManager, DiscoverFunctionsModel
 from discover_agents_manager import DiscoverAgentsManager, DiscoverAgentsModel
-from functions_and_agents_metadata import FunctionsAndAgentsMetadata, AddFunctionModel, AddFunctionInput, Agent, GetAgentModel, UpsertAgentModel, UpsertAgentInput
+from functions_and_agents_metadata import FunctionsAndAgentsMetadata, AddFunctionModel, AddFunctionInput, Agent, GetAgentModel, UpsertAgentInput
 from cachetools import TTLCache
 from rate_limiter import RateLimiter, SyncRateLimiter
 rate_limiter = RateLimiter(rate=5, period=1)  # Allow 5 tasks per second
@@ -49,27 +49,27 @@ async def discoverFunctions(function_input: DiscoverFunctionsModel):
     return {'response': result, 'elapsed_time': elapsed_time}
 
 @app.post('/add_function/')
-async def addFunction(function_output: AddFunctionInput):
+async def addFunction(function_input: AddFunctionInput):
     """Endpoint to push functions based on provided functions."""
-    logging.info(f'Adding function: {function_output.name}')
+    logging.info(f'Adding function: {function_input.name}')
     functions = {}
     function_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming']
 
-    if function_output.category not in function_types:
-        return {'response': f'Invalid category for function {function_output.name}, must be one of {function_types}'}
+    if function_input.category not in function_types:
+        return {'response': f'Invalid category for function {function_input.name}, must be one of {function_types}'}
 
     # Append the new function to the category
     new_function = {
-        'name': function_output.name,
-        'description': function_output.description
+        'name': function_input.name,
+        'description': function_input.description
     }
-    functions[function_output.category] = [new_function]
+    functions[function_input.category] = [new_function]
 
     # Push the functions
-    result, elapsed_time1 = await functions_and_agents_metadata.set_function(AddFunctionModel(function_output))
+    result, elapsed_time1 = await functions_and_agents_metadata.set_function(function_input)
     if result != "success":
         return {'response': result, 'elapsed_time': elapsed_time1}
-    result, elapsed_time2 = await discover_functions_manager.push_functions(function_output.user_id, function_output.api_key, functions)
+    result, elapsed_time2 = await discover_functions_manager.push_functions(function_input.user_id, function_input.api_key, functions)
     return {'response': result, 'elapsed_time': elapsed_time1+elapsed_time2}
 
 @app.post('/get_agent/')
@@ -103,7 +103,7 @@ async def upsertAgent(agent_input: UpsertAgentInput):
     agents[agent_input.category] = [new_agent]
 
     # Push the agent
-    response, elapsed_time1 = functions_and_agents_metadata.upsert_agent(UpsertAgentModel(agent_input))
+    response, elapsed_time1 = functions_and_agents_metadata.upsert_agent(agent_input)
     if response != "success":
         return {'response': result, 'elapsed_time': elapsed_time1}
 
