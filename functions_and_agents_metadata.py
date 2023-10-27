@@ -5,11 +5,11 @@ import traceback
 import time
 import pymongo
 
-from motor.motor_asyncio import AsyncIOMotorClient
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCursor
 from pymongo.server_api import ServerApi
 from dotenv import load_dotenv
-from pydantic import BaseModel
-from rate_limiter import RateLimiter
+from pydantic import BaseModel, Field
+from rate_limiter import RateLimiter, SyncRateLimiter
 from asyncio import Lock
 from typing import List, Dict, Optional, Union
 
@@ -17,46 +17,43 @@ class GetAgentModel(BaseModel):
     name: str
     user_id: str
 
-class GetFunctionsModel(BaseModel):
-    functions: List[str]
-
 class UpsertAgentInput(BaseModel):
     name: str
     user_id: str
     api_key: str
     description: Optional[str] = None 
     system_message: Optional[str] = None
-    function_names: Optional[List[str]] = None # cumulative
+    function_names: Optional[List[str]] = None
     category: Optional[str] = None
     agents: Optional[List[Dict]] = None
     invitees: Optional[List[str]] = None
-    
+
 class Agent(BaseModel):
-    name: str = ""
-    user_id: str = ""
-    description: str = ""
-    system_message: str = ""
-    functions: List[Dict] = []
-    category: str = ""
-    agents: List[Dict] = [] 
-    invitees: List[str] = []
+    name: str = Field(default="")
+    user_id: str = Field(default="")
+    description: str = Field(default="")
+    system_message: str = Field(default="")
+    functions: List[Dict] = Field(default_factory=list)
+    category: str = Field(default="")
+    agents: List[Dict] = Field(default_factory=list)
+    invitees: List[str] = Field(default_factory=list)
 
 class AgentModel(BaseModel):
-    name: str = ""
-    user_id: str = ""
-    description: str = ""
-    system_message: str = ""
-    function_names: List[str] = []
-    category: str = ""
-    agents: List[Dict] = [] 
-    invitees: List[str] = []
+    name: str = Field(default="")
+    user_id: str = Field(default="")
+    description: str = Field(default="")
+    system_message: str = Field(default="")
+    function_names: List[str] = Field(default_factory=list)
+    category: str = Field(default="")
+    agents: List[Dict] = Field(default_factory=list)
+    invitees: List[str] = Field(default_factory=list)
     
 class AddFunctionInput(BaseModel):
     name: str
     user_id: str
     api_key: str
     description: str
-    arguments: Dict[str, Union[str, Dict]] 
+    arguments: Optional[Dict[str, Union[str, Dict]]] = None
     required: Optional[List[str]] = None
     category: str
     packages: Optional[List[str]] = None
@@ -65,14 +62,14 @@ class AddFunctionInput(BaseModel):
     
 class AddFunctionModel(BaseModel):
     name: str
-    user_id: str = ""
+    user_id: str = Field(default="")
     description: str
-    arguments: Dict[str, Union[str, Dict]] 
-    required: List[str] = []
+    arguments: Dict[str, Union[str, Dict]] = Field(default_factory=Dict)
+    required: List[str] = Field(default_factory=list)
     category: str
-    packages: List[str] = []
-    code: str = ""
-    class_name: str = ""
+    packages: List[str] = Field(default_factory=list)
+    code: str = Field(default="")
+    class_name: str = Field(default="")
 
 class FunctionsAndAgentsMetadata:
     def __init__(self):
@@ -83,6 +80,7 @@ class FunctionsAndAgentsMetadata:
         self.funcs_collection = None
         self.agents_collection = None
         self.rate_limiter = None
+        self.sync_rate_limiter = None
         self.init_lock = Lock()
 
     async def initialize(self):
@@ -101,6 +99,8 @@ class FunctionsAndAgentsMetadata:
                 self.agents_collection = self.db['Agents']
                 await self.agents_collection.create_index([("name", pymongo.ASCENDING), ("user_id", pymongo.ASCENDING)], unique=True)
                 self.rate_limiter = RateLimiter(rate=10, period=1)
+                self.sync_rate_limiter = SyncRateLimiter(rate=10, period=1)
+                
             except Exception as e:
                 logging.warn(f"FunctionsAndAgentsMetadata: initialize exception {e}\n{traceback.format_exc()}")
     
@@ -121,14 +121,15 @@ class FunctionsAndAgentsMetadata:
         if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
             await self.initialize()
         try:
-            doc_cursor = await self.rate_limiter.execute(self.funcs_collection.find, {"name": {"$in": function_names}, "user_id": user_id})
-            docs = await doc_cursor.to_list(length=1000)
+            doc_cursor = self.sync_rate_limiter.execute(self.funcs_collection.find, {"name": {"$in": function_names}, "user_id": user_id})
+            docs = await self.rate_limiter.execute(doc_cursor.to_list, length=1000)
             function_models = [AddFunctionModel(**doc) for doc in docs]
             end = time.time()
             return function_models, end-start
         except Exception as e:
             end = time.time()
-            return f"FunctionsAndAgentsMetadata: get_function exception {e}\n{traceback.format_exc()}", end-start
+            logging.warn(f"FunctionsAndAgentsMetadata: get_function exception {e}\n{traceback.format_exc()}")
+            return [], end-start
 
     async def set_function(self, function: AddFunctionInput):
         start = time.time()
@@ -141,7 +142,7 @@ class FunctionsAndAgentsMetadata:
             update_result = await self.rate_limiter.execute(
                 self.funcs_collection.update_one,
                 {"name": function.name, "user_id": function.user_id},
-                {"$set": AddFunctionModel(function).dict()},
+                {"$set": AddFunctionModel(**function.dict(exclude_none=True)).dict()},
                 upsert=True
             )
             if update_result.matched_count == 0 and update_result.upserted_id is None:
@@ -160,49 +161,55 @@ class FunctionsAndAgentsMetadata:
             doc = await self.rate_limiter.execute(self.agents_collection.find_one, {"name": agent_input.name, "user_id": agent_input.user_id})
             if doc is None:
                 end = time.time()
-                return Agent(), end-start
+                return AgentModel(), end-start
             agent_model = AgentModel(**doc)
             if resolve_functions:
-                agent = Agent(agent_model)
-                agent.functions = await self.pull_functions(agent_model.function_names)
+                agent = Agent(**agent_model.dict())
+                agent.functions, elapsed = await self.pull_functions(agent_input.user_id, agent_model.function_names)
                 end = time.time()
-                return agent, end-start
+                return agent, (end-start) + elapsed
             else:
                 end = time.time()
                 return agent_model, end-start
         except Exception as e:
             end = time.time()
-            return f"FunctionsAndAgentsMetadata: get_agent exception {e}\n{traceback.format_exc()}", end-start
+            logging.warn(f"FunctionsAndAgentsMetadata: get_agent exception {e}\n{traceback.format_exc()}")
+            return AgentModel(), end-start
+        
+    def update_agent(self, agent, agent_upsert):
+        changed = False
+        for field, new_value in agent_upsert.dict(exclude_none=True).items():
+            # Skip fields that don't exist on the agent object
+            if not hasattr(agent, field):
+                continue
+            old_value = getattr(agent, field, None)
+            if new_value != old_value:
+                changed = True
+                if field == 'function_names' and old_value is not None:
+                    # Ensure both old_value and new_value are lists before appending
+                    new_value = old_value + (new_value if isinstance(new_value, list) else [new_value])
+                setattr(agent, field, new_value)  # replace old value or append to it
+        return changed
 
     async def upsert_agent(self, agent_upsert: UpsertAgentInput):
         start = time.time()
         changed = False
+        elapsed = 0
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
         try:
-            agent: AgentModel = await self.get_agent(GetAgentModel(agent_upsert.name, agent_upsert.user_id), False)
-            # if it is not a global agent then only let the owner upsert it
-            if agent.user_id != "" and agent_upsert.user_id != agent.user_id:
-                end = time.time()
-                return "User cannot modify someone elses agent.", end-start
-            if agent_upsert.function_names:
+            agent, elapsed = await self.get_agent(GetAgentModel(name=agent_upsert.name, user_id=agent_upsert.user_id), False)
+            # if found in DB we are updating
+            if agent.name != "":
+                # if it is not a global agent then only let the owner upsert it
+                if agent.user_id != "" and agent_upsert.user_id != agent.user_id:
+                    end = time.time()
+                    return "User cannot modify someone elses agent.", (end-start) + elapsed
+                changed = self.update_agent(agent, agent_upsert)
+            # otherwise new agent
+            else:
+                agent = AgentModel(**agent_upsert.dict(exclude_none=True))
                 changed = True
-                agent.function_names.append(agent_upsert.function_names)
-            if agent_upsert.system_message:
-                changed = True
-                agent.system_message = agent_upsert.system_message
-            if agent_upsert.category:
-                changed = True
-                agent.category = agent_upsert.category
-            if agent_upsert.description:
-                changed = True
-                agent.description = agent_upsert.description
-            if agent_upsert.agents:
-                changed = True
-                agent.agents = agent_upsert.agents
-            if agent_upsert.invitees:
-                changed = True
-                agent.invitees = agent_upsert.invitees
             if changed:
                 update_result = await self.rate_limiter.execute(
                     self.agents_collection.update_one,
@@ -214,6 +221,6 @@ class FunctionsAndAgentsMetadata:
                     logging.warn("No documents were inserted or updated.")
         except Exception as e:
             end = time.time()
-            return f"FunctionsAndAgentsMetadata: set_agent exception {e}\n{traceback.format_exc()}", end-start
+            return f"FunctionsAndAgentsMetadata: set_agent exception {e}\n{traceback.format_exc()}", (end-start) + elapsed
         end = time.time()
-        return "success" if changed else "Agent not changed, no changed fields found!", end-start
+        return "success" if changed else "Agent not changed, no changed fields found!", (end-start) + elapsed

@@ -42,7 +42,7 @@ async def discoverFunctions(function_input: DiscoverFunctionsModel):
     if function_input.category not in function_types:
         return {'response': f'Invalid category {function_input.category}, must be one of {function_types}'}
 
-    logging.info(f'Discovering function: {function_input.query}')
+    logging.info(f'Discovering function: {function_input}')
     result, elapsed_time = await discover_functions_manager.pull_functions(function_input)
     if len(result) > 0:
         discoverfunctioncache[function_input] = result
@@ -81,23 +81,22 @@ async def getAgent(agent_input: GetAgentModel):
         logging.info(f'Found agent in cache, result {result}')
         return {'response': result, 'elapsed_time': 0}
     response, elapsed_time = await functions_and_agents_metadata.get_agent(agent_input)
-    if isinstance(response, Agent) and len(response.name) > 0:
+    if len(response.name) > 0:
         agentcache[agent_input.name] = response
     # try to find it globally
     else:
         agent_input.user_id = ""
         response, elapsed_time = await functions_and_agents_metadata.get_agent(agent_input)
-        if isinstance(response, Agent) and len(response.name) > 0:
+        if len(response.name) > 0:
             agentcache[agent_input.name] = response 
     return {'response': response, 'elapsed_time': elapsed_time}
 
 @app.post('/upsert_agent/')
 async def upsertAgent(agent_input: UpsertAgentInput):
     """Endpoint to upsert agent."""
-    logging.info(f'Adding agent: {agent_input.name}')
+    logging.info(f'Upsert agent: {agent_input.name}')
     agents = {}
     agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'groups']
-
     if agent_input.category not in agent_types:
         return {'response': f'Invalid category for agent {agent_input.name}, must be one of {agent_types}'}
 
@@ -107,13 +106,12 @@ async def upsertAgent(agent_input: UpsertAgentInput):
         'description': agent_input.description
     }
     agents[agent_input.category] = [new_agent]
-
     # Push the agent
-    response, elapsed_time1 = functions_and_agents_metadata.upsert_agent(agent_input)
+    response, elapsed_time1 = await functions_and_agents_metadata.upsert_agent(agent_input)
     if response != "success":
-        return {'response': result, 'elapsed_time': elapsed_time1}
-
-    agentcache.pop(agent_input.name)
+        return {'response': response, 'elapsed_time': elapsed_time1}
+    if agentcache.get(agent_input.name):
+        agentcache.pop(agent_input.name)
     discoveragentscache.clear()
     result, elapsed_time2 = await discover_agents_manager.push_agents(agent_input.user_id, agent_input.api_key, agents)
     return {'response': result, 'elapsed_time': elapsed_time1+elapsed_time2}
