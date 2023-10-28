@@ -20,12 +20,12 @@ from cohere_rerank import CohereRerank
 from langchain.schema import Document
 from datetime import datetime, timedelta
 from qdrant_client.http.models import PayloadSchemaType
+from functions_and_agents_metadata import AuthAgent
 
 class DiscoverAgentsModel(BaseModel):
     query: Optional[str] = None
     category: str
-    user_id: str
-    api_key: str
+    auth: AuthAgent
 
 class DiscoverAgentsManager:
 
@@ -54,7 +54,7 @@ class DiscoverAgentsManager:
                     distance=rest.Distance.COSINE,
                 ),
             )
-            self.client.create_payload_index(self.collection_name, "metadata.user_id", field_schema=PayloadSchemaType.KEYWORD)
+            self.client.create_payload_index(self.collection_name, "metadata.namespace_id", field_schema=PayloadSchemaType.KEYWORD)
         except:
             logging.info(f"DiscoverAgentsManager: loaded from cloud...")
         finally:
@@ -69,7 +69,7 @@ class DiscoverAgentsManager:
             )
             return compression_retriever
 
-    def transform(self, user_id, data, category):
+    def transform(self, namespace_id, data, category):
         """Transforms agent data for a specific category."""
         now = datetime.now().timestamp()
         result = []
@@ -83,7 +83,7 @@ class DiscoverAgentsManager:
                 continue
             metadata = {
                 "id":  random.randint(0, 2**32 - 1),
-                "user_id": user_id,
+                "namespace_id": namespace_id,
                 "extra_index": category,
                 "last_accessed_at": now,
             }
@@ -124,7 +124,7 @@ class DiscoverAgentsManager:
         #loop = asyncio.get_event_loop()
         try:
             documents = await self.get_retrieved_nodes(memory,
-                agent_input.query, agent_input.category, agent_input.user_id)
+                agent_input.query, agent_input.category, agent_input.auth.namespace_id)
             if len(documents) > 0:
                 parsed_response = self.extract_name_and_category(documents)
                 response.append(parsed_response)
@@ -142,20 +142,20 @@ class DiscoverAgentsManager:
                 f"DiscoverAgentsManager: pull_agents operation took {end - start} seconds")
             return response, end-start
 
-    async def get_retrieved_nodes(self, memory: ContextualCompressionRetriever, query_str: str, category: str, user_id: str):
+    async def get_retrieved_nodes(self, memory: ContextualCompressionRetriever, query_str: str, category: str, namespace_id: str):
         kwargs = {}
         if len(category) > 0:
             kwargs["extra_index"] = category
         # if user provided then look for null or direct matches, otherwise look for null so it matches public agents
-        if user_id:
+        if namespace_id:
             filter = rest.Filter(
                 should=[
                     rest.FieldCondition(
-                        key="metadata.user_id",
-                        match=rest.MatchValue(value=user_id),
+                        key="metadata.namespace_id",
+                        match=rest.MatchValue(value=namespace_id),
                     ),
                     rest.IsNullCondition(
-                        is_null=rest.PayloadField(key="metadata.user_id")
+                        is_null=rest.PayloadField(key="metadata.namespace_id")
                     )
                 ]
             )
@@ -164,7 +164,7 @@ class DiscoverAgentsManager:
             filter = rest.Filter(
                 should=[
                     rest.IsNullCondition(
-                        is_null=rest.PayloadField(key="metadata.user_id")
+                        is_null=rest.PayloadField(key="metadata.namespace_id")
                     )
                 ]
             )
@@ -181,7 +181,7 @@ class DiscoverAgentsManager:
             f"DiscoverAgentsManager: Load operation took {end - start} seconds")
         return memory
 
-    async def push_agents(self, user_id: str, api_key: str, agents):
+    async def push_agents(self, namespace_id: str, api_key: str, agents):
         """Update the current index with new agents."""
         start = time.time()
         memory = self.load(api_key)
@@ -202,7 +202,7 @@ class DiscoverAgentsManager:
             for agent_type in agent_types:
                 if agent_type in agents:
                     transformed_agents = self.transform(
-                        user_id, agents[agent_type], agent_type)
+                        namespace_id, agents[agent_type], agent_type)
                     all_docs.extend(transformed_agents)
             ids = [doc.metadata["id"] for doc in all_docs]
             await self.rate_limiter.execute(memory.base_retriever.vectorstore.aadd_documents, all_docs, ids=ids)

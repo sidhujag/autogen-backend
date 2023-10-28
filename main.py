@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from discover_functions_manager import DiscoverFunctionsManager, DiscoverFunctionsModel
 from discover_agents_manager import DiscoverAgentsManager, DiscoverAgentsModel
-from functions_and_agents_metadata import FunctionsAndAgentsMetadata, AddFunctionModel, AddFunctionInput, Agent, GetAgentModel, UpsertAgentInput
+from functions_and_agents_metadata import FunctionsAndAgentsMetadata, AddFunctionInput, GetAgentModel, UpsertAgentInput
 from cachetools import TTLCache
 from rate_limiter import RateLimiter, SyncRateLimiter
 rate_limiter = RateLimiter(rate=5, period=1)  # Allow 5 tasks per second
@@ -69,7 +69,7 @@ async def addFunction(function_input: AddFunctionInput):
     result, elapsed_time1 = await functions_and_agents_metadata.set_function(function_input)
     if result != "success":
         return {'response': result, 'elapsed_time': elapsed_time1}
-    result, elapsed_time2 = await discover_functions_manager.push_functions(function_input.user_id, function_input.api_key, functions)
+    result, elapsed_time2 = await discover_functions_manager.push_functions(function_input.auth.namespace_id, function_input.api_key, functions)
     return {'response': result, 'elapsed_time': elapsed_time1+elapsed_time2}
 
 @app.post('/get_agent/')
@@ -85,7 +85,7 @@ async def getAgent(agent_input: GetAgentModel):
         agentcache[agent_input.name] = response
     # try to find it globally
     else:
-        agent_input.user_id = ""
+        agent_input.auth.namespace_id = ""
         response, elapsed_time = await functions_and_agents_metadata.get_agent(agent_input)
         if len(response.name) > 0:
             agentcache[agent_input.name] = response 
@@ -113,7 +113,7 @@ async def upsertAgent(agent_input: UpsertAgentInput):
     if agentcache.get(agent_input.name):
         agentcache.pop(agent_input.name)
     discoveragentscache.clear()
-    result, elapsed_time2 = await discover_agents_manager.push_agents(agent_input.user_id, agent_input.api_key, agents)
+    result, elapsed_time2 = await discover_agents_manager.push_agents(agent_input.auth.namespace_id, agent_input.api_key, agents)
     return {'response': result, 'elapsed_time': elapsed_time1+elapsed_time2}
 
 @app.post('/discover_agents/')
