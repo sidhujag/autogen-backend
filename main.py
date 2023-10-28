@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from discover_functions_manager import DiscoverFunctionsManager, DiscoverFunctionsModel
 from discover_agents_manager import DiscoverAgentsManager, DiscoverAgentsModel
-from functions_and_agents_metadata import FunctionsAndAgentsMetadata, AddFunctionInput, GetAgentModel, UpsertAgentInput
+from functions_and_agents_metadata import FunctionsAndAgentsMetadata, AddFunctionInput, GetAgentModel, DeleteAgentModel, UpsertAgentInput
 from cachetools import TTLCache
 from rate_limiter import RateLimiter, SyncRateLimiter
 rate_limiter = RateLimiter(rate=5, period=1)  # Allow 5 tasks per second
@@ -69,7 +69,7 @@ async def addFunction(function_input: AddFunctionInput):
     result, elapsed_time1 = await functions_and_agents_metadata.set_function(function_input)
     if result != "success":
         return {'response': result, 'elapsed_time': elapsed_time1}
-    result, elapsed_time2 = await discover_functions_manager.push_functions(function_input.auth.namespace_id, function_input.api_key, functions)
+    result, elapsed_time2 = await discover_functions_manager.push_functions(function_input.auth, functions)
     return {'response': result, 'elapsed_time': elapsed_time1+elapsed_time2}
 
 @app.post('/get_agent/')
@@ -113,7 +113,7 @@ async def upsertAgent(agent_input: UpsertAgentInput):
     if agentcache.get(agent_input.name):
         agentcache.pop(agent_input.name)
     discoveragentscache.clear()
-    result, elapsed_time2 = await discover_agents_manager.push_agents(agent_input.auth.namespace_id, agent_input.api_key, agents)
+    result, elapsed_time2 = await discover_agents_manager.push_agents(agent_input.auth, agents)
     return {'response': result, 'elapsed_time': elapsed_time1+elapsed_time2}
 
 @app.post('/discover_agents/')
@@ -133,3 +133,17 @@ async def discoverAgents(agent_input: DiscoverAgentsModel):
     if len(result) > 0 and agent_input.query:
         discoveragentscache[agent_input.query] = result
     return {'response': result, 'elapsed_time': elapsed_time}
+
+@app.post('/delete_agent/')
+async def deleteAgent(agent_input: DeleteAgentModel):
+    """Endpoint to delete agent."""
+    logging.info(f'Deleting agent: {agent_input.name}')
+    # delete the agent
+    response, elapsed_time1 = await functions_and_agents_metadata.delete_agent(agent_input)
+    if response != "success":
+        return {'response': response, 'elapsed_time': elapsed_time1}
+    if agentcache.get(agent_input.name):
+        agentcache.pop(agent_input.name)
+    discoveragentscache.clear()
+    result, elapsed_time2 = discover_agents_manager.delete_agent(agent_input.auth, agent_input.name)
+    return {'response': result, 'elapsed_time': elapsed_time1+elapsed_time2}

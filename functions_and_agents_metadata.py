@@ -25,6 +25,10 @@ class AuthAgent:
         return hash(str(self))
 
 
+class DeleteAgentModel(BaseModel):
+    name: str
+    auth: AuthAgent
+    
 class GetAgentModel(BaseModel):
     name: str
     auth: AuthAgent
@@ -234,3 +238,28 @@ class FunctionsAndAgentsMetadata:
             return f"FunctionsAndAgentsMetadata: set_agent exception {e}\n{traceback.format_exc()}", (end-start) + elapsed
         end = time.time()
         return "success" if changed else "Agent not changed, no changed fields found!", (end-start) + elapsed
+
+    async def delete_agent(self, agent_delete: DeleteAgentModel):
+        start = time.time()
+        elapsed = 0
+        if self.client is None or self.agents_collection is None or self.rate_limiter is None:
+            await self.initialize()
+        try:
+            agent, elapsed = await self.get_agent(GetAgentModel(name=agent_delete.name, namespace_id=agent_delete.auth.namespace_id), False)
+            # if found in DB we are updating
+            if agent.name != "":
+                # cannot delete global agent nor someone elses
+                if agent.namespace_id == "" or agent_delete.auth.namespace_id != agent.namespace_id:
+                    end = time.time()
+                    return "User cannot delete someone elses agent.", (end-start) + elapsed            
+                delete_result = await self.rate_limiter.execute(
+                    self.agents_collection.delete_one,
+                    {"name": agent_delete.name, "namespace_id": agent_delete.auth.namespace_id}
+                )
+                if delete_result.delete_count == 0:
+                    logging.warn("No documents were delete.")
+        except Exception as e:
+            end = time.time()
+            return f"FunctionsAndAgentsMetadata: delete_agent exception {e}\n{traceback.format_exc()}", (end-start) + elapsed
+        end = time.time()
+        return "success", (end-start) + elapsed

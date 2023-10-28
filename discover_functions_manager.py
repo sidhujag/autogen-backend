@@ -133,7 +133,7 @@ class DiscoverFunctionsManager:
             except Exception as e:
                 logging.warn(f"DiscoverFunctionsManager: pull_functions exception {e}\n{traceback.format_exc()}")
                 self.inited = True
-        memory = self.load(function_input.api_key)
+        memory = self.load(function_input.auth.api_key)
         response = []
         #loop = asyncio.get_event_loop()
         try:
@@ -195,10 +195,10 @@ class DiscoverFunctionsManager:
             f"DiscoverFunctionsManager: Load operation took {end - start} seconds")
         return memory
 
-    async def push_functions(self, namespace_id: str, api_key: str, functions):
+    async def push_functions(self, auth: AuthAgent, functions):
         """Update the current index with new functions."""
         start = time.time()
-        memory = self.load(api_key)
+        memory = self.load(auth.api_key)
         try:
             logging.info("DiscoverFunctionsManager: adding functions to index...")
 
@@ -214,7 +214,7 @@ class DiscoverFunctionsManager:
             for func_type in function_types:
                 if func_type in functions:
                     transformed_functions = self.transform(
-                        namespace_id, functions[func_type], func_type)
+                        auth.namespace_id, functions[func_type], func_type)
                     all_docs.extend(transformed_functions)
             ids = [doc.metadata["id"] for doc in all_docs]
             await self.rate_limiter.execute(memory.base_retriever.vectorstore.aadd_documents, all_docs, ids=ids)

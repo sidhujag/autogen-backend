@@ -119,7 +119,7 @@ class DiscoverAgentsManager:
             except Exception as e:
                 logging.warn(f"DiscoverAgentsManager: pull_agents exception {e}\n{traceback.format_exc()}")
                 self.inited = True
-        memory = self.load(agent_input.api_key)
+        memory = self.load(agent_input.auth.api_key)
         response = []
         #loop = asyncio.get_event_loop()
         try:
@@ -181,10 +181,10 @@ class DiscoverAgentsManager:
             f"DiscoverAgentsManager: Load operation took {end - start} seconds")
         return memory
 
-    async def push_agents(self, namespace_id: str, api_key: str, agents):
+    async def push_agents(self, auth: AuthAgent, agents):
         """Update the current index with new agents."""
         start = time.time()
-        memory = self.load(api_key)
+        memory = self.load(auth.api_key)
         try:
             logging.info("DiscoverAgentsManager: adding agents to index...")
 
@@ -202,7 +202,7 @@ class DiscoverAgentsManager:
             for agent_type in agent_types:
                 if agent_type in agents:
                     transformed_agents = self.transform(
-                        namespace_id, agents[agent_type], agent_type)
+                        auth.namespace_id, agents[agent_type], agent_type)
                     all_docs.extend(transformed_agents)
             ids = [doc.metadata["id"] for doc in all_docs]
             await self.rate_limiter.execute(memory.base_retriever.vectorstore.aadd_documents, all_docs, ids=ids)
@@ -240,3 +240,29 @@ class DiscoverAgentsManager:
                 logging.error(f"DiscoverAgentsManager: prune_agents failed after reload, exception {e}\n{traceback.format_exc()}")
                 raise
         return True
+    
+    def delete_agent(self, auth: AuthAgent, name: str):
+        """Update the current index with new agents."""
+        start = time.time()
+        try:
+            logging.info("DiscoverAgentsManager: deleting agent...")
+            filter = rest.Filter(
+                should=[
+                    rest.FieldCondition(
+                        key="metadata.namespace_id",
+                        match=rest.MatchValue(value=auth.namespace_id),
+                    ),
+                    rest.FieldCondition(
+                        key="name",
+                        match=rest.MatchValue(value=name),
+                    )
+                ]
+            )
+            self.client.delete(collection_name=self.collection_name, points_selector=filter)
+        except Exception as e:
+            logging.warn(f"DiscoverAgentsManager: delete_agent exception {e}\n{traceback.format_exc()}")
+        finally:
+            end = time.time()
+            logging.info(
+                f"DiscoverAgentsManager: delete_agent took {end - start} seconds")
+            return "success", end-start
