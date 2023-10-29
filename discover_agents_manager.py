@@ -194,7 +194,8 @@ class DiscoverAgentsManager:
                               'sensory_perception',
                               'programming',
                               'planning',
-                              'groups']
+                              'groups',
+                              'user']
 
             all_docs = []
 

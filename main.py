@@ -96,7 +96,7 @@ async def upsertAgent(agent_input: UpsertAgentInput):
     """Endpoint to upsert agent."""
     logging.info(f'Upsert agent: {agent_input.name}')
     agents = {}
-    agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'groups']
+    agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'groups', 'user']
     if agent_input.category not in agent_types:
         return {'response': f'Invalid category for agent {agent_input.name}, must be one of {agent_types}'}
 
@@ -124,7 +124,7 @@ async def upsertAgent(agent_input: UpsertAgentInput):
 @app.post('/discover_agents/')
 async def discoverAgents(agent_input: DiscoverAgentsModel):
     """Endpoint to upsert an agent."""
-    agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'groups']
+    agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'groups', 'user']
 
     if agent_input.category not in agent_types:
         return {'response': f'Invalid category {agent_input.category}, must be one of {agent_types}'}
