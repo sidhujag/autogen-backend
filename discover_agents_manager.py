@@ -147,7 +147,7 @@ class DiscoverAgentsManager:
         if len(category) > 0:
             kwargs["extra_index"] = category
         # if user provided then look for null or direct matches, otherwise look for null so it matches public agents
-        if namespace_id:
+        if namespace_id != "":
             filter = rest.Filter(
                 should=[
                     rest.FieldCondition(

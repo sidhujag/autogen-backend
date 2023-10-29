@@ -24,6 +24,8 @@ class AuthAgent:
     def __hash__(self):
         return hash(str(self))
 
+    def to_dict(self):
+        return {"namespace_id": self.namespace_id}
 
 class DeleteAgentModel(BaseModel):
     name: str
@@ -47,6 +49,7 @@ class UpsertAgentInput(BaseModel):
 
 class BaseAgent(BaseModel):
     name: str = Field(default="")
+    auth: AuthAgent
     namespace_id: str = Field(default="")
     description: str = Field(default="")
     default_auto_reply: str = Field(default="")
@@ -72,7 +75,11 @@ class AddFunctionInput(BaseModel):
     packages: Optional[List[str]] = None
     code: Optional[str] = None
     class_name: Optional[str] = None
-    
+    def to_add_function_model_dict(self):
+        data = self.dict(exclude={"auth"}, exclude_none=True)
+        data.update(self.auth.to_dict())
+        return data
+
 class AddFunctionModel(BaseModel):
     name: str
     namespace_id: str = Field(default="")
@@ -152,10 +159,12 @@ class FunctionsAndAgentsMetadata:
             db_function_exists = await self.does_function_exist(function.auth.namespace_id, function.name)
             if db_function_exists is True:
                 return "Function with that name already exists.", end-start
+            function_model_data = function.to_add_function_model_dict()
+            function_model = AddFunctionModel(**function_model_data)
             update_result = await self.rate_limiter.execute(
                 self.funcs_collection.update_one,
                 {"name": function.name, "namespace_id": function.auth.namespace_id},
-                {"$set": AddFunctionModel(**function.dict(exclude_none=True)).dict()},
+                {"$set": function_model.dict()},
                 upsert=True
             )
             if update_result.matched_count == 0 and update_result.upserted_id is None:
