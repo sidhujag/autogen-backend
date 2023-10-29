@@ -37,6 +37,7 @@ class UpsertAgentInput(BaseModel):
     name: str
     auth: AuthAgent
     human_input_mode: Optional[str] = None
+    default_auto_reply: Optional[str] = None
     description: Optional[str] = None 
     system_message: Optional[str] = None
     function_names: Optional[List[str]] = None
@@ -48,7 +49,8 @@ class BaseAgent(BaseModel):
     name: str = Field(default="")
     namespace_id: str = Field(default="")
     description: str = Field(default="")
-    human_input_mode: str = Field(default="TERMINATE")
+    default_auto_reply: str = Field(default="")
+    system_message: str = Field(default="")
     system_message: str = Field(default="")
     category: str = Field(default="")
     agents: List[Dict] = Field(default_factory=list)
