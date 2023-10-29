@@ -36,6 +36,7 @@ class GetAgentModel(BaseModel):
 class UpsertAgentInput(BaseModel):
     name: str
     auth: AuthAgent
+    human_input_mode: Optional[str] = None
     description: Optional[str] = None 
     system_message: Optional[str] = None
     function_names: Optional[List[str]] = None
@@ -43,25 +44,21 @@ class UpsertAgentInput(BaseModel):
     agents: Optional[List[Dict]] = None
     invitees: Optional[List[str]] = None
 
-class Agent(BaseModel):
+class BaseAgent(BaseModel):
     name: str = Field(default="")
     namespace_id: str = Field(default="")
     description: str = Field(default="")
+    human_input_mode: str = Field(default="TERMINATE")
     system_message: str = Field(default="")
-    functions: List[Dict] = Field(default_factory=list)
     category: str = Field(default="")
     agents: List[Dict] = Field(default_factory=list)
     invitees: List[str] = Field(default_factory=list)
 
-class AgentModel(BaseModel):
-    name: str = Field(default="")
-    namespace_id: str = Field(default="")
-    description: str = Field(default="")
-    system_message: str = Field(default="")
+class Agent(BaseAgent):
+    functions: List[Dict] = Field(default_factory=list)
+
+class AgentModel(BaseAgent):
     function_names: List[str] = Field(default_factory=list)
-    category: str = Field(default="")
-    agents: List[Dict] = Field(default_factory=list)
-    invitees: List[str] = Field(default_factory=list)
     
 class AddFunctionInput(BaseModel):
     name: str

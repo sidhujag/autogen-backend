@@ -106,6 +106,11 @@ async def upsertAgent(agent_input: UpsertAgentInput):
         'description': agent_input.description
     }
     agents[agent_input.category] = [new_agent]
+    if agent_input.human_input_mode:
+        human_input_types = ['ALWAYS', 'NEVER', 'TERMINATE']
+        if agent_input.human_input_mode not in human_input_types:
+            return {'response': f'Invalid human_input_mode for agent {agent_input.human_input_mode}, must be one of {human_input_types}'}
+
     # Push the agent
     response, elapsed_time1 = await functions_and_agents_metadata.upsert_agent(agent_input)
     if response != "success":
