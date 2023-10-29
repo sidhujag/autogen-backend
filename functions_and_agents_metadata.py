@@ -42,8 +42,8 @@ class UpsertAgentInput(BaseModel):
     system_message: Optional[str] = None
     function_names: Optional[List[str]] = None
     category: Optional[str] = None
-    agents: Optional[List[str]] = None
-    invitees: Optional[List[str]] = None
+    agents: Optional[set] = None
+    invitees: Optional[set] = None
 
 class BaseAgent(BaseModel):
     name: str = Field(default="")
@@ -53,8 +53,8 @@ class BaseAgent(BaseModel):
     system_message: str = Field(default="")
     system_message: str = Field(default="")
     category: str = Field(default="")
-    agents: List[str] = Field(default_factory=list)
-    invitees: List[str] = Field(default_factory=list)
+    agents: set = Field(default_factory=set)
+    invitees: set = Field(default_factory=set)
 
 class Agent(BaseAgent):
     functions: List[Dict] = Field(default_factory=list)
