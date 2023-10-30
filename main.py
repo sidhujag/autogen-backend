@@ -103,24 +103,19 @@ async def upsertAgent(agent_input: UpsertAgentInput):
         return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
     if agent_input.name == '':
         return {'response': "Error: agent name not provided!", 'elapsed_time': 0}
-    logging.info(f'Upsert agent: {agent_input.name}')
     agents = {}
-    logging.info(f'Upsert agen0 {agent_input}')
     if agent_input.category:
         agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'groups', 'user']
         if agent_input.category not in agent_types:
             return {'response': f'Invalid category for agent {agent_input.name}, must be one of {agent_types}'}
-    logging.info('Upsert agen1')
     if agent_input.human_input_mode:
         human_input_types = ['ALWAYS', 'NEVER', 'TERMINATE']
         if agent_input.human_input_mode not in human_input_types:
             return {'response': f'Invalid human_input_mode for agent {agent_input.human_input_mode}, must be one of {human_input_types}'}
-    logging.info('Upsert agen2')
     # Push the agent
     response, elapsed_time1, agent = await functions_and_agents_metadata.upsert_agent(agent_input)
     if response != "success":
         return {'response': response, 'elapsed_time': elapsed_time1}
-    logging.info('Upsert agen3')
     discoveragentscache.clear()
     # Append the new agent to the category
     new_agent = {
