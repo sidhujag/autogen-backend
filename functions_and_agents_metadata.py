@@ -11,19 +11,10 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from rate_limiter import RateLimiter, SyncRateLimiter
 from asyncio import Lock
-from typing import List, Dict, Optional, Union
-class AuthAgent:
+from typing import List, Optional, Any
+class AuthAgent(BaseModel):
     api_key: str
     namespace_id: str
-    def __str__(self):
-        return self.api_key + self.namespace_id
-
-    def __eq__(self,other):
-        return self.api_key == other.api_key and self.namespace_id == other.namespace_id
-
-    def __hash__(self):
-        return hash(str(self))
-
     def to_dict(self):
         return {"namespace_id": self.namespace_id}
 
@@ -44,33 +35,47 @@ class UpsertAgentInput(BaseModel):
     system_message: Optional[str] = None
     function_names: Optional[List[str]] = None
     category: Optional[str] = None
-    agents: Optional[set] = None
-    invitees: Optional[set] = None
+    agents: Optional[dict[str, bool]] = None
+    invitees: Optional[dict[str, bool]] = None
 
 class BaseAgent(BaseModel):
     name: str = Field(default="")
     auth: AuthAgent
-    namespace_id: str = Field(default="")
     description: str = Field(default="")
     default_auto_reply: str = Field(default="")
     system_message: str = Field(default="")
     system_message: str = Field(default="")
     category: str = Field(default="")
-    agents: set = Field(default_factory=set)
-    invitees: set = Field(default_factory=set)
+    agents: dict = Field(default_factory=dict)
+    invitees: dict = Field(default_factory=dict)
+
+class OpenAIParameter(BaseModel):
+    type: str
+    properties: dict[str, Any]
+    required: Optional[List[str]] = None
+
+class AddFunctionModel(BaseModel):
+    name: str
+    namespace_id: str = Field(default="")
+    description: str
+    parameters: OpenAIParameter
+    category: str
+    packages: List[str] = Field(default_factory=list)
+    code: str = Field(default="")
+    class_name: str = Field(default="")
+
 
 class Agent(BaseAgent):
-    functions: List[Dict] = Field(default_factory=list)
+    functions: List[AddFunctionModel] = Field(default_factory=list)
 
 class AgentModel(BaseAgent):
     function_names: List[str] = Field(default_factory=list)
-    
+
 class AddFunctionInput(BaseModel):
     name: str
     auth: AuthAgent
     description: str
-    arguments: Optional[Dict[str, Union[str, Dict]]] = None
-    required: Optional[List[str]] = None
+    parameters: OpenAIParameter
     category: str
     packages: Optional[List[str]] = None
     code: Optional[str] = None
@@ -79,17 +84,6 @@ class AddFunctionInput(BaseModel):
         data = self.dict(exclude={"auth"}, exclude_none=True)
         data.update(self.auth.to_dict())
         return data
-
-class AddFunctionModel(BaseModel):
-    name: str
-    namespace_id: str = Field(default="")
-    description: str
-    arguments: Dict[str, Union[str, Dict]] = Field(default_factory=Dict)
-    required: List[str] = Field(default_factory=list)
-    category: str
-    packages: List[str] = Field(default_factory=list)
-    code: str = Field(default="")
-    class_name: str = Field(default="")
 
 class FunctionsAndAgentsMetadata:
     def __init__(self):
@@ -134,7 +128,8 @@ class FunctionsAndAgentsMetadata:
             return doc is not None, end-start
         except Exception as e:
             end = time.time()
-            return f"FunctionsAndAgentsMetadata: get_function exception {e}\n{traceback.format_exc()}", end-start
+            logging.warn(f"FunctionsAndAgentsMetadata: get_function exception {e}\n{traceback.format_exc()}")
+            return False, end-start
 
     async def pull_functions(self, namespace_id: str, function_names: List[str]) -> List[AddFunctionModel]:
         start = time.time()
@@ -143,7 +138,8 @@ class FunctionsAndAgentsMetadata:
         try:
             doc_cursor = self.sync_rate_limiter.execute(self.funcs_collection.find, {"name": {"$in": function_names}, "namespace_id": namespace_id})
             docs = await self.rate_limiter.execute(doc_cursor.to_list, length=1000)
-            function_models = [AddFunctionModel(**doc) for doc in docs]
+            # Convert each document in docs to a dictionary if necessary, then to an AddFunctionModel
+            function_models = [AddFunctionModel(**doc) for doc in docs if isinstance(doc, dict)]
             end = time.time()
             return function_models, end-start
         except Exception as e:
@@ -153,12 +149,13 @@ class FunctionsAndAgentsMetadata:
 
     async def set_function(self, function: AddFunctionInput):
         start = time.time()
+        elapsed_check_exists = 0
         if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
             await self.initialize()
         try:
-            db_function_exists = await self.does_function_exist(function.auth.namespace_id, function.name)
+            db_function_exists, elapsed_check_exists = await self.does_function_exist(function.auth.namespace_id, function.name)
             if db_function_exists is True:
-                return "Function with that name already exists.", end-start
+                return "Function with that name already exists.", (end-start) + elapsed_check_exists
             function_model_data = function.to_add_function_model_dict()
             function_model = AddFunctionModel(**function_model_data)
             update_result = await self.rate_limiter.execute(
@@ -171,9 +168,9 @@ class FunctionsAndAgentsMetadata:
                 logging.warn("No documents were inserted or updated.")
         except Exception as e:
             end = time.time()
-            return f"FunctionsAndAgentsMetadata: set_function exception {e}\n{traceback.format_exc()}", end-start
+            return f"FunctionsAndAgentsMetadata: set_function exception {e}\n{traceback.format_exc()}", (end-start) + elapsed_check_exists
         end = time.time()
-        return "success", end-start
+        return "success", (end-start) + elapsed_check_exists
     
     async def get_agent(self, agent_input: GetAgentModel, resolve_functions: bool = True):
         start = time.time()
@@ -183,7 +180,8 @@ class FunctionsAndAgentsMetadata:
             doc = await self.rate_limiter.execute(self.agents_collection.find_one, {"name": agent_input.name, "namespace_id": agent_input.auth.namespace_id})
             if doc is None:
                 end = time.time()
-                return AgentModel(), end-start
+                return AgentModel(auth=agent_input.auth), end-start
+            doc['auth'] = AuthAgent(**doc['auth'])
             agent_model = AgentModel(**doc)
             if resolve_functions:
                 agent = Agent(**agent_model.dict())
@@ -196,22 +194,36 @@ class FunctionsAndAgentsMetadata:
         except Exception as e:
             end = time.time()
             logging.warn(f"FunctionsAndAgentsMetadata: get_agent exception {e}\n{traceback.format_exc()}")
-            return AgentModel(), end-start
+            return AgentModel(auth=agent_input.auth), end-start
         
     def update_agent(self, agent, agent_upsert):
         changed = False
-        for field, new_value in agent_upsert.dict(exclude_none=True).items():
+        # Convert agent and agent_upsert to dictionaries for easier field checking and updating
+        agent_dict = agent.dict() if isinstance(agent, BaseModel) else agent
+        agent_upsert_dict = agent_upsert.dict(exclude_none=True) if isinstance(agent_upsert, BaseModel) else agent_upsert
+
+        for field, new_value in agent_upsert_dict.items():
             # Skip fields that don't exist on the agent object
-            if not hasattr(agent, field):
+            if field not in agent_dict:
                 continue
-            old_value = getattr(agent, field, None)
-            if new_value != old_value:
-                changed = True
-                if field == 'function_names' and old_value is not None:
-                    # Ensure both old_value and new_value are lists before appending
-                    new_value = old_value + (new_value if isinstance(new_value, list) else [new_value])
-                setattr(agent, field, new_value)  # replace old value or append to it
-        return changed
+            old_value = agent_dict.get(field, None)
+            if field == 'function_names' and old_value is not None:
+                if not isinstance(new_value, list):
+                    new_value = [new_value]
+                unique_new_values = [value for value in new_value if value not in old_value]
+                if unique_new_values:
+                    changed = True
+                    agent_dict[field] = old_value + unique_new_values
+            else:
+                if new_value != old_value:
+                    changed = True
+                    agent_dict[field] = new_value
+        # Convert agent_dict back to a Pydantic model if agent was initially a Pydantic model
+        if isinstance(agent, BaseModel):
+            agent = agent.__class__(**agent_dict)
+
+        return changed, agent
+
 
     async def upsert_agent(self, agent_upsert: UpsertAgentInput):
         start = time.time()
@@ -220,14 +232,14 @@ class FunctionsAndAgentsMetadata:
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
         try:
-            agent, elapsed = await self.get_agent(GetAgentModel(name=agent_upsert.name, namespace_id=agent_upsert.auth.namespace_id), False)
+            agent, elapsed = await self.get_agent(GetAgentModel(name=agent_upsert.name, auth=agent_upsert.auth), False)
             # if found in DB we are updating
             if agent.name != "":
                 # if it is not a global agent then only let the owner upsert it
-                if agent.namespace_id != "" and agent_upsert.auth.namespace_id != agent.namespace_id:
+                if agent.auth.namespace_id != "" and agent_upsert.auth.namespace_id != agent.auth.namespace_id:
                     end = time.time()
                     return "User cannot modify someone elses agent.", (end-start) + elapsed
-                changed = self.update_agent(agent, agent_upsert)
+                changed, agent = self.update_agent(agent, agent_upsert)
             # otherwise new agent
             else:
                 agent = AgentModel(**agent_upsert.dict(exclude_none=True))
@@ -243,9 +255,9 @@ class FunctionsAndAgentsMetadata:
                     logging.warn("No documents were inserted or updated.")
         except Exception as e:
             end = time.time()
-            return f"FunctionsAndAgentsMetadata: set_agent exception {e}\n{traceback.format_exc()}", (end-start) + elapsed
+            return f"FunctionsAndAgentsMetadata: upsert_agent exception {e}\n{traceback.format_exc()}", (end-start) + elapsed, None
         end = time.time()
-        return "success" if changed else "Agent not changed, no changed fields found!", (end-start) + elapsed
+        return "success" if changed else "Agent not changed, no changed fields found!", (end-start) + elapsed, agent
 
     async def delete_agent(self, agent_delete: DeleteAgentModel):
         start = time.time()
@@ -253,11 +265,11 @@ class FunctionsAndAgentsMetadata:
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
         try:
-            agent, elapsed = await self.get_agent(GetAgentModel(name=agent_delete.name, namespace_id=agent_delete.auth.namespace_id), False)
+            agent, elapsed = await self.get_agent(GetAgentModel(name=agent_delete.name, auth=agent_delete.auth), False)
             # if found in DB we are updating
             if agent.name != "":
                 # cannot delete global agent nor someone elses
-                if agent.namespace_id == "" or agent_delete.auth.namespace_id != agent.namespace_id:
+                if agent.auth.namespace_id == "" or agent_delete.auth.namespace_id != agent.auth.namespace_id:
                     end = time.time()
                     return "User cannot delete someone elses agent.", (end-start) + elapsed            
                 delete_result = await self.rate_limiter.execute(
