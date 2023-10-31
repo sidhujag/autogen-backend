@@ -41,8 +41,9 @@ class UpsertAgentInput(BaseModel):
 class BaseAgent(BaseModel):
     name: str = Field(default="")
     auth: AuthAgent
-    description: str = Field(default="")
+    human_input_mode: str = Field(default="")
     default_auto_reply: str = Field(default="")
+    description: str = Field(default="")
     system_message: str = Field(default="")
     category: str = Field(default="")
     agents: list = Field(default_factory=list)
