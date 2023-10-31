@@ -21,6 +21,7 @@ from langchain.schema import Document
 from datetime import datetime, timedelta
 from qdrant_client.http.models import PayloadSchemaType
 from functions_and_agents_metadata import AuthAgent
+from typing import List
 
 class DiscoverAgentsModel(BaseModel):
     query: Optional[str] = None
@@ -112,7 +113,6 @@ class DiscoverAgentsManager:
     
     async def pull_agents(self, agent_input: DiscoverAgentsModel):
         """Fetch agents based on a query."""
-        start = time.time()
         if self.inited is False:
             try:
                 self.client.get_collection(self.collection_name)
@@ -137,10 +137,7 @@ class DiscoverAgentsManager:
         except Exception as e:
             logging.warn(f"DiscoverAgentsManager: pull_agents exception {e}\n{traceback.format_exc()}")
         finally:
-            end = time.time()
-            logging.info(
-                f"DiscoverAgentsManager: pull_agents operation took {end - start} seconds")
-            return response, end-start
+            return response
 
     async def get_retrieved_nodes(self, memory: ContextualCompressionRetriever, query_str: str, category: str, namespace_id: str):
         kwargs = {}
@@ -183,7 +180,6 @@ class DiscoverAgentsManager:
 
     async def push_agents(self, auth: AuthAgent, agents):
         """Update the current index with new agents."""
-        start = time.time()
         memory = self.load(auth.api_key)
         try:
             logging.info("DiscoverAgentsManager: adding agents to index...")
@@ -210,10 +206,7 @@ class DiscoverAgentsManager:
         except Exception as e:
             logging.warn(f"DiscoverAgentsManager: push_agents exception {e}\n{traceback.format_exc()}")
         finally:
-            end = time.time()
-            logging.info(
-                f"DiscoverAgentsManager: push_agents took {end - start} seconds")
-            return "success", end-start
+            return "success"
 
     def prune_agents(self):
         """Prune agents that haven't been used for atleast six weeks."""
@@ -241,13 +234,12 @@ class DiscoverAgentsManager:
                 logging.error(f"DiscoverAgentsManager: prune_agents failed after reload, exception {e}\n{traceback.format_exc()}")
                 raise
         return True
-    
-    def delete_agent(self, auth: AuthAgent, name: str):
-        """Update the current index with new agents."""
-        start = time.time()
+
+    def delete_agents(self, auth: AuthAgent, agents: List[str]):
+        """Delete agents from the Qdrant collection."""
         try:
-            logging.info("DiscoverAgentsManager: deleting agent...")
-            filter = rest.Filter(
+            logging.info("DiscoverAgentsManager: deleting agents...")
+            filter_conditions = rest.Filter(
                 should=[
                     rest.FieldCondition(
                         key="metadata.namespace_id",
@@ -255,15 +247,13 @@ class DiscoverAgentsManager:
                     ),
                     rest.FieldCondition(
                         key="name",
-                        match=rest.MatchValue(value=name),
+                        match=rest.MatchAny(any=agents),
                     )
                 ]
             )
-            self.client.delete(collection_name=self.collection_name, points_selector=filter)
+            self.client.delete(collection_name=self.collection_name, points_selector=filter_conditions)
+            return "success"
         except Exception as e:
-            logging.warn(f"DiscoverAgentsManager: delete_agent exception {e}\n{traceback.format_exc()}")
-        finally:
-            end = time.time()
-            logging.info(
-                f"DiscoverAgentsManager: delete_agent took {end - start} seconds")
-            return "success", end-start
+            logging.warning(f"DiscoverAgentsManager: delete_agents exception {e}\n{traceback.format_exc()}")
+            return str(e)
+

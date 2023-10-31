@@ -2,14 +2,14 @@
 import logging
 import os
 import traceback
-import time
 import pymongo
 
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCursor
+from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.server_api import ServerApi
+from pymongo.errors import PyMongoError
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-from rate_limiter import RateLimiter, SyncRateLimiter
+from rate_limiter import RateLimiter
 from asyncio import Lock
 from typing import List, Optional, Any, Tuple
 class AuthAgent(BaseModel):
@@ -43,7 +43,6 @@ class BaseAgent(BaseModel):
     auth: AuthAgent
     description: str = Field(default="")
     default_auto_reply: str = Field(default="")
-    system_message: str = Field(default="")
     system_message: str = Field(default="")
     category: str = Field(default="")
     agents: dict = Field(default_factory=dict)
@@ -93,8 +92,8 @@ class FunctionsAndAgentsMetadata:
         self.client = None
         self.funcs_collection = None
         self.agents_collection = None
+        self.db = None
         self.rate_limiter = None
-        self.sync_rate_limiter = None
         self.init_lock = Lock()
 
     async def initialize(self):
@@ -113,200 +112,192 @@ class FunctionsAndAgentsMetadata:
                 self.agents_collection = self.db['Agents']
                 await self.agents_collection.create_index([("name", pymongo.ASCENDING), ("namespace_id", pymongo.ASCENDING)], unique=True)
                 self.rate_limiter = RateLimiter(rate=10, period=1)
-                self.sync_rate_limiter = SyncRateLimiter(rate=10, period=1)
                 
             except Exception as e:
                 logging.warn(f"FunctionsAndAgentsMetadata: initialize exception {e}\n{traceback.format_exc()}")
-    
-    async def does_function_exist(self, namespace_id: str, function_name: str) -> bool:
-        start = time.time()
-        if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
-            await self.initialize()
-        try:
-            doc = await self.rate_limiter.execute(self.funcs_collection.find_one, {"name": function_name, "namespace_id": namespace_id})
-            end = time.time()
-            return doc is not None, end-start
-        except Exception as e:
-            end = time.time()
-            logging.warn(f"FunctionsAndAgentsMetadata: get_function exception {e}\n{traceback.format_exc()}")
-            return False, end-start
 
-    async def pull_functions(self, namespace_id: str, function_names: List[str]) -> List[AddFunctionModel]:
-        start = time.time()
+    async def pull_functions(self, namespace_id: str, function_names: List[str], session=None) -> List[AddFunctionModel]:
         if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
             await self.initialize()
+
+        own_session = False
+        if session is None:
+            session = await self.client.start_session()
+            session.start_transaction(read_concern=pymongo.read_concern.ReadConcern("snapshot"))
+            own_session = True
+
         try:
-            doc_cursor = self.sync_rate_limiter.execute(self.funcs_collection.find, {"name": {"$in": function_names}, "namespace_id": namespace_id})
-            docs = await self.rate_limiter.execute(doc_cursor.to_list, length=1000)
-            # Convert each document in docs to a dictionary if necessary, then to an AddFunctionModel
+            query = {"name": {"$in": function_names}, "namespace_id": namespace_id}
+            doc_cursor = self.funcs_collection.find(query, session=session)
+            docs = await self.rate_limiter.execute(doc_cursor.to_list, length=None)
             function_models = [AddFunctionModel(**doc) for doc in docs if isinstance(doc, dict)]
-            end = time.time()
-            return function_models, end-start
+            
+            if own_session:
+                await session.commit_transaction()
+                
+            return function_models
         except Exception as e:
-            end = time.time()
-            logging.warn(f"FunctionsAndAgentsMetadata: get_function exception {e}\n{traceback.format_exc()}")
-            return [], end-start
+            if own_session:
+                await session.abort_transaction()
+            logging.warn(f"FunctionsAndAgentsMetadata: pull_functions exception {e}\n{traceback.format_exc()}")
+            return []
+        finally:
+            if own_session:
+                session.end_session()
+
 
     async def set_functions(self, functions: List[AddFunctionInput]) -> Tuple[str, float]:
-        start = time.time()
         if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
             await self.initialize()
-        upsert = False
+
         operations = []
-        function_names = [func.name for func in functions]
-        existing_functions_docs = await self.get_existing_functions(function_names, functions[0].auth.namespace_id)
-        existing_functions = {func['name']: AddFunctionModel(**func) for func in existing_functions_docs}
-        
         for function in functions:
             function_model_data = function.to_add_function_model_dict()
             function_model = AddFunctionModel(**function_model_data)
-            
-            if function.name in existing_functions:
-                existing_function = existing_functions[function.name]
-                if function_model != existing_function:  # Compare the entire objects
-                    update_op = pymongo.UpdateOne(
-                        {"name": function.name, "namespace_id": function.auth.namespace_id},
-                        {"$set": function_model.dict()},
-                        upsert=True
-                    )
-                    operations.append(update_op)
-            else:
-                update_op = pymongo.UpdateOne(
-                    {"name": function.name, "namespace_id": function.auth.namespace_id},
-                    {"$set": function_model.dict()},
-                    upsert=True
-                )
-                operations.append(update_op)
+
+            update_op = pymongo.UpdateOne(
+                {"name": function.name, "namespace_id": function.auth.namespace_id},
+                {"$set": function_model.dict()},
+                upsert=True
+            )
+            operations.append(update_op)
 
         if operations:
+            session = await self.client.start_session()
+            session.start_transaction()
             try:
                 await self.rate_limiter.execute(
                     self.funcs_collection.bulk_write,
-                    operations
+                    operations,
+                    session=session
                 )
+                await session.commit_transaction()
+                return "success"
+            except PyMongoError as e:
+                await session.abort_transaction()
+                logging.warn(f"FunctionsAndAgentsMetadata: set_functions exception {e}\n{traceback.format_exc()}")
+                return f"MongoDB error occurred while adding functions: {str(e)}"
             except Exception as e:
-                end = time.time()
-                return f"FunctionsAndAgentsMetadata: set_functions exception {e}\n{traceback.format_exc()}", end - start
-            
-        end = time.time()
-        return "success" if upsert else "Functions were identical, no changed fields found!", (end-start)
+                await session.abort_transaction()
+                return f"FunctionsAndAgentsMetadata: set_functions exception {e}\n{traceback.format_exc()}"
+            finally:
+                session.end_session()
+        return "No functions were provided."
 
-
-    async def get_existing_functions(self, function_names: List[str], namespace_id: str) -> List[dict]:
-        query = {
-            "name": {"$in": function_names},
-            "namespace_id": namespace_id
-        }
-        cursor = self.funcs_collection.find(query)
-        existing_functions = await cursor.to_list(length=None)
-        return existing_functions
-
-    async def get_agent(self, agent_input: GetAgentModel, resolve_functions: bool = True):
-        start = time.time()
-        if self.client is None or self.agents_collection is None or self.rate_limiter is None:
-            await self.initialize()
-        try:
-            doc = await self.rate_limiter.execute(self.agents_collection.find_one, {"name": agent_input.name, "namespace_id": agent_input.auth.namespace_id})
-            if doc is None:
-                end = time.time()
-                return AgentModel(auth=agent_input.auth), end-start
-            doc['auth'] = AuthAgent(**doc['auth'])
-            agent_model = AgentModel(**doc)
-            if resolve_functions:
-                agent = Agent(**agent_model.dict())
-                agent.functions, elapsed = await self.pull_functions(agent_input.auth.namespace_id, agent_model.function_names)
-                end = time.time()
-                return agent, (end-start)
-            else:
-                end = time.time()
-                return agent_model, end-start
-        except Exception as e:
-            end = time.time()
-            logging.warn(f"FunctionsAndAgentsMetadata: get_agent exception {e}\n{traceback.format_exc()}")
-            return AgentModel(auth=agent_input.auth), end-start
+    async def get_agents(self, agent_inputs: List[GetAgentModel], resolve_functions: bool = True) -> Tuple[List[AgentModel], str]:
+        if not agent_inputs:
+            return [], "Agent input list is empty"
         
-    def update_agent(self, agent, agent_upsert):
-        changed = False
-        # Convert agent and agent_upsert to dictionaries for easier field checking and updating
-        agent_dict = agent.dict() if isinstance(agent, BaseModel) else agent
-        agent_upsert_dict = agent_upsert.dict(exclude_none=True) if isinstance(agent_upsert, BaseModel) else agent_upsert
-
-        for field, new_value in agent_upsert_dict.items():
-            # Skip fields that don't exist on the agent object
-            if field not in agent_dict:
-                continue
-            old_value = agent_dict.get(field, None)
-            if field == 'function_names' and old_value is not None:
-                if not isinstance(new_value, list):
-                    new_value = [new_value]
-                unique_new_values = [value for value in new_value if value not in old_value]
-                if unique_new_values:
-                    changed = True
-                    agent_dict[field] = old_value + unique_new_values
-            else:
-                if new_value != old_value:
-                    changed = True
-                    agent_dict[field] = new_value
-        # Convert agent_dict back to a Pydantic model if agent was initially a Pydantic model
-        if isinstance(agent, BaseModel):
-            agent = agent.__class__(**agent_dict)
-
-        return changed, agent
-
-
-    async def upsert_agent(self, agent_upsert: UpsertAgentInput):
-        start = time.time()
-        changed = False
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
-        try:
-            agent, elapsed = await self.get_agent(GetAgentModel(name=agent_upsert.name, auth=agent_upsert.auth), False)
-            # if found in DB we are updating
-            if agent.name != "":
-                # if it is not a global agent then only let the owner upsert it
-                if agent.auth.namespace_id != "" and agent_upsert.auth.namespace_id != agent.auth.namespace_id:
-                    end = time.time()
-                    return "User cannot modify someone elses agent.", (end-start)
-                changed, agent = self.update_agent(agent, agent_upsert)
-            # otherwise new agent
-            else:
-                agent = AgentModel(**agent_upsert.dict(exclude_none=True))
-                changed = True
-            if changed:
-                update_result = await self.rate_limiter.execute(
-                    self.agents_collection.update_one,
-                    {"name": agent_upsert.name, "namespace_id": agent_upsert.auth.namespace_id},
-                    {"$set": agent.dict()},
-                    upsert=True
-                )
-                if update_result.matched_count == 0 and update_result.upserted_id is None:
-                    logging.warn("No documents were inserted or updated.")
-        except Exception as e:
-            end = time.time()
-            return f"FunctionsAndAgentsMetadata: upsert_agent exception {e}\n{traceback.format_exc()}", (end-start), None
-        end = time.time()
-        return "success" if changed else "Agent not changed, no changed fields found!", (end-start), agent
 
-    async def delete_agent(self, agent_delete: DeleteAgentModel):
-        start = time.time()
+        session = await self.client.start_session()
+        session.start_transaction(read_concern=pymongo.read_concern.ReadConcern("snapshot"))
+
+        try:
+            unique_agents = {(agent_input.name, agent_input.auth.namespace_id) for agent_input in agent_inputs}
+            names, namespace_ids = zip(*unique_agents)
+            query = {"name": {"$in": names}, "namespace_id": {"$in": namespace_ids}}
+            doc_cursor = self.agents_collection.find(query, session=session)
+            agents_docs = await self.rate_limiter.execute(doc_cursor.to_list, length=None)
+            agents = [AgentModel(**doc) for doc in agents_docs]
+            agents_dict = {(agent.name, agent.auth.namespace_id): agent for agent in agents}
+
+            all_function_names = set()
+            for agent in agents:
+                all_function_names.update(agent.function_names)
+            
+            functions_dict = {}
+            if resolve_functions and all_function_names:
+                functions = await self.pull_functions(namespace_ids[0], list(all_function_names), session=session)
+                functions_dict = {function.name: function for function in functions}
+
+            results = []
+            for agent_input in agent_inputs:
+                key = (agent_input.name, agent_input.auth.namespace_id)
+                agent_model = agents_dict.get(key, AgentModel(auth=agent_input.auth))
+                
+                if resolve_functions and agent_model.function_names:
+                    agent = Agent(**agent_model.dict())
+                    agent.functions = [functions_dict[name] for name in agent_model.function_names if name in functions_dict]
+                    results.append(agent)
+                else:
+                    results.append(agent_model)
+            await session.commit_transaction()
+            return results, None
+        except PyMongoError as e:
+            await session.abort_transaction()
+            logging.warn(f"FunctionsAndAgentsMetadata: get_agents exception {e}\n{traceback.format_exc()}")
+            return [], f"MongoDB error occurred while retrieving agents: {str(e)}"
+        except Exception as e:
+            await session.abort_transaction()
+            logging.warn(f"FunctionsAndAgentsMetadata: get_agents exception {e}\n{traceback.format_exc()}")
+            return [], f"Error occurred while retrieving agents: {str(e)}"
+        finally:
+            session.end_session()
+
+    async def upsert_agents(self, agents_upsert: List[UpsertAgentInput]):
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
+
+        session = await self.client.start_session()
+        session.start_transaction()
+
         try:
-            agent = await self.get_agent(GetAgentModel(name=agent_delete.name, auth=agent_delete.auth), False)
-            # if found in DB we are updating
-            if agent.name != "":
-                # cannot delete global agent nor someone elses
-                if agent.auth.namespace_id == "" or agent_delete.auth.namespace_id != agent.auth.namespace_id:
-                    end = time.time()
-                    return "User cannot delete someone elses agent.", (end-start)            
-                delete_result = await self.rate_limiter.execute(
-                    self.agents_collection.delete_one,
-                    {"name": agent_delete.name, "namespace_id": agent_delete.auth.namespace_id}
-                )
-                if delete_result.delete_count == 0:
-                    logging.warn("No documents were delete.")
+            operations = []
+            for agent_upsert in agents_upsert:
+                query = {
+                    "name": agent_upsert.name, 
+                    "namespace_id": agent_upsert.auth.namespace_id
+                }
+                update = {
+                    "$set": {k: v for k, v in agent_upsert.dict(exclude_none=True).items() if k != 'function_names'},
+                    "$addToSet": {"function_names": {"$each": agent_upsert.function_names or []}}
+                }
+                update_op = pymongo.UpdateOne(query, update, upsert=True)
+                operations.append(update_op)
+            
+            if operations:
+                await self.agents_collection.bulk_write(operations, session=session)
+            
+            await session.commit_transaction()
+            return "success"
+        except PyMongoError as e:
+            logging.warn(f"FunctionsAndAgentsMetadata: upsert_agents exception {e}\n{traceback.format_exc()}")
+            return f"MongoDB error occurred while upserting agents: {str(e)}"
         except Exception as e:
-            end = time.time()
-            return f"FunctionsAndAgentsMetadata: delete_agent exception {e}\n{traceback.format_exc()}", (end-start)
-        end = time.time()
-        return "success", (end-start)
+            await session.abort_transaction()
+            logging.warn(f"FunctionsAndAgentsMetadata: upsert_agents exception {e}\n{traceback.format_exc()}")
+            return str(e)
+        finally:
+            session.end_session()
+
+    async def delete_agents(self, agents_delete: List[DeleteAgentModel]):
+        if not agents_delete:
+            return "Agent delete list is empty"
+        
+        if self.client is None or self.agents_collection is None or self.rate_limiter is None:
+            await self.initialize()
+
+        queries = [{"name": agent_delete.name, "namespace_id": agent_delete.auth.namespace_id} for agent_delete in agents_delete]
+        session = await self.client.start_session()
+        try:
+            async with session.start_transaction():
+                # Perform the delete operations in batch
+                delete_result = await self.agents_collection.delete_many({"$or": queries}, session=session)
+                
+                if delete_result.deleted_count == 0:
+                    return "No agents found or user not authorized to delete."
+                elif delete_result.deleted_count < len(agents_delete):
+                    return "Some agents were not found or user not authorized to delete."
+                
+                return "success"
+        except Exception as e:
+            logging.warn(f"FunctionsAndAgentsMetadata: delete_agents exception {e}\n{traceback.format_exc()}")
+            return str(e)
+        finally:
+            session.end_session()
+
+
+
+

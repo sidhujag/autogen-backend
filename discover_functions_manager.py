@@ -126,7 +126,6 @@ class DiscoverFunctionsManager:
     
     async def pull_functions(self, function_input: DiscoverFunctionsModel):
         """Fetch functions based on a query."""
-        start = time.time()
         if self.inited is False:
             try:
                 self.client.get_collection(self.collection_name)
@@ -151,10 +150,7 @@ class DiscoverFunctionsManager:
         except Exception as e:
             logging.warn(f"DiscoverFunctionsManager: pull_functions exception {e}\n{traceback.format_exc()}")
         finally:
-            end = time.time()
-            logging.info(
-                f"DiscoverFunctionsManager: pull_functions operation took {end - start} seconds")
-            return response, end-start
+            return response
 
     async def get_retrieved_nodes(self, memory: ContextualCompressionRetriever, query_str: str, category: str, namespace_id: str):
         kwargs = {}
@@ -197,7 +193,6 @@ class DiscoverFunctionsManager:
 
     async def push_functions(self, auth: AuthAgent, functions):
         """Update the current index with new functions."""
-        start = time.time()
         memory = self.load(auth.api_key)
         try:
             logging.info("DiscoverFunctionsManager: adding functions to index...")
@@ -221,10 +216,7 @@ class DiscoverFunctionsManager:
         except Exception as e:
             logging.warn(f"DiscoverFunctionsManager: push_functions exception {e}\n{traceback.format_exc()}")
         finally:
-            end = time.time()
-            logging.info(
-                f"DiscoverFunctionsManager: push_functions took {end - start} seconds")
-            return "success", end-start
+            return "success"
 
     def prune_functions(self):
         """Prune functions that haven't been used for atleast six weeks."""
