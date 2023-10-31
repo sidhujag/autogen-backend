@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from rate_limiter import RateLimiter, SyncRateLimiter
 from asyncio import Lock
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Tuple
 class AuthAgent(BaseModel):
     api_key: str
     namespace_id: str
@@ -147,31 +147,60 @@ class FunctionsAndAgentsMetadata:
             logging.warn(f"FunctionsAndAgentsMetadata: get_function exception {e}\n{traceback.format_exc()}")
             return [], end-start
 
-    async def set_function(self, function: AddFunctionInput):
+    async def set_functions(self, functions: List[AddFunctionInput]) -> Tuple[str, float]:
         start = time.time()
-        elapsed_check_exists = 0
         if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
             await self.initialize()
-        try:
-            db_function_exists, elapsed_check_exists = await self.does_function_exist(function.auth.namespace_id, function.name)
-            if db_function_exists is True:
-                return "Function with that name already exists.", (end-start) + elapsed_check_exists
+        upsert = False
+        operations = []
+        function_names = [func.name for func in functions]
+        existing_functions_docs = await self.get_existing_functions(function_names, functions[0].auth.namespace_id)
+        existing_functions = {func['name']: AddFunctionModel(**func) for func in existing_functions_docs}
+        
+        for function in functions:
             function_model_data = function.to_add_function_model_dict()
             function_model = AddFunctionModel(**function_model_data)
-            update_result = await self.rate_limiter.execute(
-                self.funcs_collection.update_one,
-                {"name": function.name, "namespace_id": function.auth.namespace_id},
-                {"$set": function_model.dict()},
-                upsert=True
-            )
-            if update_result.matched_count == 0 and update_result.upserted_id is None:
-                logging.warn("No documents were inserted or updated.")
-        except Exception as e:
-            end = time.time()
-            return f"FunctionsAndAgentsMetadata: set_function exception {e}\n{traceback.format_exc()}", (end-start) + elapsed_check_exists
+            
+            if function.name in existing_functions:
+                existing_function = existing_functions[function.name]
+                if function_model != existing_function:  # Compare the entire objects
+                    update_op = pymongo.UpdateOne(
+                        {"name": function.name, "namespace_id": function.auth.namespace_id},
+                        {"$set": function_model.dict()},
+                        upsert=True
+                    )
+                    operations.append(update_op)
+            else:
+                update_op = pymongo.UpdateOne(
+                    {"name": function.name, "namespace_id": function.auth.namespace_id},
+                    {"$set": function_model.dict()},
+                    upsert=True
+                )
+                operations.append(update_op)
+
+        if operations:
+            try:
+                await self.rate_limiter.execute(
+                    self.funcs_collection.bulk_write,
+                    operations
+                )
+            except Exception as e:
+                end = time.time()
+                return f"FunctionsAndAgentsMetadata: set_functions exception {e}\n{traceback.format_exc()}", end - start
+            
         end = time.time()
-        return "success", (end-start) + elapsed_check_exists
-    
+        return "success" if upsert else "Functions were identical, no changed fields found!", (end-start)
+
+
+    async def get_existing_functions(self, function_names: List[str], namespace_id: str) -> List[dict]:
+        query = {
+            "name": {"$in": function_names},
+            "namespace_id": namespace_id
+        }
+        cursor = self.funcs_collection.find(query)
+        existing_functions = await cursor.to_list(length=None)
+        return existing_functions
+
     async def get_agent(self, agent_input: GetAgentModel, resolve_functions: bool = True):
         start = time.time()
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
@@ -187,7 +216,7 @@ class FunctionsAndAgentsMetadata:
                 agent = Agent(**agent_model.dict())
                 agent.functions, elapsed = await self.pull_functions(agent_input.auth.namespace_id, agent_model.function_names)
                 end = time.time()
-                return agent, (end-start) + elapsed
+                return agent, (end-start)
             else:
                 end = time.time()
                 return agent_model, end-start
@@ -228,7 +257,6 @@ class FunctionsAndAgentsMetadata:
     async def upsert_agent(self, agent_upsert: UpsertAgentInput):
         start = time.time()
         changed = False
-        elapsed = 0
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
         try:
@@ -238,7 +266,7 @@ class FunctionsAndAgentsMetadata:
                 # if it is not a global agent then only let the owner upsert it
                 if agent.auth.namespace_id != "" and agent_upsert.auth.namespace_id != agent.auth.namespace_id:
                     end = time.time()
-                    return "User cannot modify someone elses agent.", (end-start) + elapsed
+                    return "User cannot modify someone elses agent.", (end-start)
                 changed, agent = self.update_agent(agent, agent_upsert)
             # otherwise new agent
             else:
@@ -255,23 +283,22 @@ class FunctionsAndAgentsMetadata:
                     logging.warn("No documents were inserted or updated.")
         except Exception as e:
             end = time.time()
-            return f"FunctionsAndAgentsMetadata: upsert_agent exception {e}\n{traceback.format_exc()}", (end-start) + elapsed, None
+            return f"FunctionsAndAgentsMetadata: upsert_agent exception {e}\n{traceback.format_exc()}", (end-start), None
         end = time.time()
-        return "success" if changed else "Agent not changed, no changed fields found!", (end-start) + elapsed, agent
+        return "success" if changed else "Agent not changed, no changed fields found!", (end-start), agent
 
     async def delete_agent(self, agent_delete: DeleteAgentModel):
         start = time.time()
-        elapsed = 0
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
         try:
-            agent, elapsed = await self.get_agent(GetAgentModel(name=agent_delete.name, auth=agent_delete.auth), False)
+            agent = await self.get_agent(GetAgentModel(name=agent_delete.name, auth=agent_delete.auth), False)
             # if found in DB we are updating
             if agent.name != "":
                 # cannot delete global agent nor someone elses
                 if agent.auth.namespace_id == "" or agent_delete.auth.namespace_id != agent.auth.namespace_id:
                     end = time.time()
-                    return "User cannot delete someone elses agent.", (end-start) + elapsed            
+                    return "User cannot delete someone elses agent.", (end-start)            
                 delete_result = await self.rate_limiter.execute(
                     self.agents_collection.delete_one,
                     {"name": agent_delete.name, "namespace_id": agent_delete.auth.namespace_id}
@@ -280,6 +307,6 @@ class FunctionsAndAgentsMetadata:
                     logging.warn("No documents were delete.")
         except Exception as e:
             end = time.time()
-            return f"FunctionsAndAgentsMetadata: delete_agent exception {e}\n{traceback.format_exc()}", (end-start) + elapsed
+            return f"FunctionsAndAgentsMetadata: delete_agent exception {e}\n{traceback.format_exc()}", (end-start)
         end = time.time()
-        return "success", (end-start) + elapsed
+        return "success", (end-start)

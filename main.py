@@ -8,6 +8,7 @@ from discover_agents_manager import DiscoverAgentsManager, DiscoverAgentsModel
 from functions_and_agents_metadata import FunctionsAndAgentsMetadata, AddFunctionInput, GetAgentModel, DeleteAgentModel, UpsertAgentInput
 from cachetools import TTLCache
 from rate_limiter import RateLimiter, SyncRateLimiter
+from typing import List
 rate_limiter = RateLimiter(rate=5, period=1)  # Allow 5 tasks per second
 rate_limiter_sync = SyncRateLimiter(rate=5, period=1)
 # Load environment variables
@@ -51,29 +52,32 @@ async def discoverFunctions(function_input: DiscoverFunctionsModel):
         discoverfunctioncache[function_input] = result
     return {'response': result, 'elapsed_time': elapsed_time}
 
-@app.post('/add_function/')
-async def addFunction(function_input: AddFunctionInput):
+@app.post('/add_functions/')
+async def addFunction(function_inputs: List[AddFunctionInput]):
     """Endpoint to push functions based on provided functions."""
-    if function_input.auth.api_key == '':
-        return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
-    if function_input.auth.namespace_id == '':
-        return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
-    logging.info(f'Adding function: {function_input.name}')
-    functions = {}
-    function_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming']
+    if len(function_inputs) == 0:
+        return {'response': "Error: No functions provided", 'elapsed_time': 0}
+    for function_input in function_inputs:
+        if function_input.auth.api_key == '':
+            return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
+        if function_input.auth.namespace_id == '':
+            return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
+        logging.info(f'Adding function: {function_input.name}')
+        functions = {}
+        function_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming']
 
-    if function_input.category not in function_types:
-        return {'response': f'Invalid category for function {function_input.name}, must be one of {function_types}'}
+        if function_input.category not in function_types:
+            return {'response': f'Invalid category for function {function_input.name}, must be one of {function_types}'}
 
-    # Append the new function to the category
-    new_function = {
-        'name': function_input.name,
-        'description': function_input.description
-    }
-    functions[function_input.category] = [new_function]
+        # Append the new function to the category
+        new_function = {
+            'name': function_input.name,
+            'description': function_input.description
+        }
+        functions[function_input.category] = [new_function]
 
     # Push the functions
-    result, elapsed_time1 = await functions_and_agents_metadata.set_function(function_input)
+    result, elapsed_time1 = await functions_and_agents_metadata.set_functions(function_inputs)
     if result != "success":
         return {'response': result, 'elapsed_time': elapsed_time1}
     result, elapsed_time2 = await discover_functions_manager.push_functions(function_input.auth, functions)
