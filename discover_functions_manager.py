@@ -37,7 +37,7 @@ class DiscoverFunctionsManager:
         self.index = None
         self.rate_limiter = rate_limiter
         self.rate_limiter_sync = rate_limiter_sync
-        self.max_length_allowed = 512
+        self.max_length_allowed = 1024
         self.collection_name = "discover_functions"
         self.client = QdrantClient(url=self.QDRANT_URL, api_key=self.QDRANT_API_KEY)
         self.inited = False

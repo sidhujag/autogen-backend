@@ -24,8 +24,8 @@ from functions_and_agents_metadata import AuthAgent
 from typing import List
 
 class DiscoverAgentsModel(BaseModel):
-    query: Optional[str] = None
-    category: str
+    query: str
+    category: Optional[str] = ""
     auth: AuthAgent
 
 class DiscoverAgentsManager:

@@ -38,7 +38,7 @@ async def discoverFunctions(function_input: DiscoverFunctionsModel):
         return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
     function_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming']
 
-    if function_input.category not in function_types:
+    if function_input.category != "" and function_input.category not in function_types:
         return {'response': f'Invalid category {function_input.category}, must be one of {function_types}'}
 
     logging.info(f'Discovering function: {function_input}')
@@ -157,7 +157,7 @@ async def discoverAgents(agent_input: DiscoverAgentsModel):
         return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
     agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'groups', 'user']
 
-    if agent_input.category not in agent_types:
+    if agent_input.category != "" and agent_input.category not in agent_types:
         return {'response': f'Invalid category {agent_input.category}, must be one of {agent_types}'}
 
     result = await discover_agents_manager.pull_agents(agent_input)
