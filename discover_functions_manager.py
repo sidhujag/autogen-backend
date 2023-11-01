@@ -26,20 +26,6 @@ class DiscoverFunctionsModel(BaseModel):
     query: Optional[str] = None
     category: str
     auth: AuthAgent
-    def __str__(self):
-        if self.query:
-            return self.query + self.auth + self.category
-        else:
-            return self.auth + self.category
-
-    def __eq__(self,other):
-        if self.query:
-            return self.query == other.query and self.auth == other.auth and self.category == other.category
-        else:
-            return self.auth == other.auth and self.category == other.category
-
-    def __hash__(self):
-        return hash(str(self))
 
 class DiscoverFunctionsManager:
 

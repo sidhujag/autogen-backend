@@ -50,15 +50,15 @@ class BaseAgent(BaseModel):
     invitees: list = Field(default_factory=list)
 
 class OpenAIParameter(BaseModel):
-    type: str
-    properties: dict[str, Any]
-    required: Optional[List[str]] = None
+    type: str = "object"
+    properties: dict = Field(default_factory=dict)
+    required: List[str] = Field(default_factory=list)
 
 class AddFunctionModel(BaseModel):
     name: str
     namespace_id: str = Field(default="")
     description: str
-    parameters: OpenAIParameter
+    parameters: OpenAIParameter = Field(default_factory=OpenAIParameter)
     category: str
     packages: List[str] = Field(default_factory=list)
     code: str = Field(default="")
@@ -75,7 +75,7 @@ class AddFunctionInput(BaseModel):
     name: str
     auth: AuthAgent
     description: str
-    parameters: OpenAIParameter
+    parameters: OpenAIParameter = OpenAIParameter(type="default", properties={})
     category: str
     packages: Optional[List[str]] = None
     code: Optional[str] = None
@@ -116,6 +116,19 @@ class FunctionsAndAgentsMetadata:
                 
             except Exception as e:
                 logging.warn(f"FunctionsAndAgentsMetadata: initialize exception {e}\n{traceback.format_exc()}")
+
+    async def do_functions_exist(self, namespace_id: str, function_names: List[str], session) -> bool:
+        if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
+            await self.initialize()
+
+        try:
+            query = {"name": {"$in": function_names}, "namespace_id": namespace_id}
+            count = await self.funcs_collection.count_documents(query, session=session)
+            return count == len(function_names)
+        except Exception as e:
+            logging.warn(f"FunctionsAndAgentsMetadata: pull_functions exception {e}\n{traceback.format_exc()}")
+            return False
+
 
     async def pull_functions(self, namespace_id: str, function_names: List[str], session=None) -> List[AddFunctionModel]:
         if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
@@ -243,10 +256,13 @@ class FunctionsAndAgentsMetadata:
 
         session = await self.client.start_session()
         session.start_transaction()
-
         try:
             operations = []
             for agent_upsert in agents_upsert:
+                # if adding functions then check if they exist first
+                if agent_upsert.function_names:
+                    if not self.do_functions_exist(agent_upsert.auth.namespace_id, agent_upsert.function_names, session):
+                        return "One of the functions you are trying to add does not exist"
                 query = {
                     "name": agent_upsert.name, 
                     "namespace_id": agent_upsert.auth.namespace_id

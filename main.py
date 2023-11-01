@@ -106,6 +106,8 @@ async def getAgents(agent_inputs: List[GetAgentModel]):
 @app.post('/upsert_agents/')
 async def upsertAgents(agent_inputs: List[UpsertAgentInput]):
     """Endpoint to upsert agent."""
+    if len(agent_inputs) == 0:
+        return {'response': "Error: No agents provided", 'elapsed_time': 0}
     start = time.time()
     agents = {}
     for agent_input in agent_inputs:
