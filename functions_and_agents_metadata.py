@@ -261,7 +261,7 @@ class FunctionsAndAgentsMetadata:
             for agent_upsert in agents_upsert:
                 # if adding functions then check if they exist first
                 if agent_upsert.function_names:
-                    if not self.do_functions_exist(agent_upsert.auth.namespace_id, agent_upsert.function_names, session):
+                    if not await self.do_functions_exist(agent_upsert.auth.namespace_id, agent_upsert.function_names, session):
                         return "One of the functions you are trying to add does not exist"
                 query = {
                     "name": agent_upsert.name, 
