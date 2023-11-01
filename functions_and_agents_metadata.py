@@ -75,7 +75,7 @@ class AddFunctionInput(BaseModel):
     name: str
     auth: AuthAgent
     description: str
-    parameters: OpenAIParameter = OpenAIParameter(type="default", properties={})
+    parameters: OpenAIParameter = OpenAIParameter(type="object", properties={})
     category: str
     packages: Optional[List[str]] = None
     code: Optional[str] = None
