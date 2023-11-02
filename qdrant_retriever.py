@@ -31,6 +31,7 @@ class QDrantVectorStoreRetriever(BaseRetriever):
 
     def _get_combined_score(
         self,
+        query: str,
         document: Document,
         vector_relevance: Optional[float],
         extra_index: str = None
@@ -41,6 +42,8 @@ class QDrantVectorStoreRetriever(BaseRetriever):
             score += vector_relevance
         if extra_index is not None and extra_index != document.metadata.get("extra_index"):
             score -= self.extra_index_penalty
+            if query == "":
+                score = 0
         return score
 
     async def get_salient_docs(self, query: str, **kwargs) -> List[Tuple[Document, float]]:
@@ -60,13 +63,14 @@ class QDrantVectorStoreRetriever(BaseRetriever):
         if user_filter:
             kwargs.update({"filter": user_filter})
         docs_and_scores = await self.get_salient_docs(query, **kwargs)
-        rescored_docs = [
-            (doc, self._get_combined_score(doc, relevance, extra_index))
-            for doc, relevance in docs_and_scores
-        ]
-        # Ensure frequently accessed memories aren't forgotten
-        for doc, _ in rescored_docs:
-            doc.metadata["last_accessed_at"] = current_time
+
+        rescored_docs = []
+        for doc, relevance in docs_and_scores:
+            combined_score = self._get_combined_score(query, doc, relevance, extra_index)
+            if combined_score != 0:  # Skip the document if the combined score is 0
+                rescored_docs.append((doc, combined_score))
+                # Ensure frequently accessed memories aren't forgotten
+                doc.metadata["last_accessed_at"] = current_time
 
         # Sort by score and extract just the documents
         sorted_docs = [doc for doc, _ in sorted(rescored_docs, key=lambda x: x[1], reverse=True)]

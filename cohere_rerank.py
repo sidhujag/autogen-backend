@@ -69,6 +69,8 @@ class CohereRerank(BaseDocumentCompressor):
         Returns:
             A sequence of compressed documents.
         """
+        if query == "":
+            return documents
         if len(documents) == 0:  # to avoid empty api call
             return []
         doc_list = list(documents)
