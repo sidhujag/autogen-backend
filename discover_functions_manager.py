@@ -1,11 +1,11 @@
 import time
 import json
 import os
-import random
 import logging
 import traceback
 import cachetools.func
-import asyncio
+import hashlib
+import uuid
 
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
@@ -22,7 +22,6 @@ from langchain.schema import Document
 from datetime import datetime, timedelta
 from qdrant_client.http.models import PayloadSchemaType
 from functions_and_agents_metadata import AuthAgent
-from concurrent.futures import ThreadPoolExecutor
 
 class DiscoverFunctionsModel(BaseModel):
     query: Optional[str] = None
@@ -71,31 +70,17 @@ class DiscoverFunctionsManager:
             )
             return compression_retriever
 
-    def parallel_check_documents(self, memory, names):
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            # `executor.map` returns an iterator of results
-            results = executor.map(lambda name: self.get_document_by_name(memory, name), names)
-            # Convert the iterator to a list to get all results
-            results_list = list(results)
-        return results_list
+    def generate_id_from_name(self, name):
+        hash_object = hashlib.sha256(name.encode())
+        # Use hexdigest for a hexadecimal string representation
+        return str(uuid.UUID(bytes=hash_object.digest()[:16]))
 
-
-    async def transform(self, memory, namespace_id, data, category):
+    async def transform(self, namespace_id, data, category):
         """Transforms function data for a specific category."""
         now = datetime.now().timestamp()
         result = []
-
-        # Start tasks for all `get_document_by_name` calls
-        names = [item['name'] for item in data]
-        
-        # Get a list of existent documents by consuming the generator
-        existent_docs = await asyncio.get_running_loop().run_in_executor(
-            None, self.parallel_check_documents, memory, names
-        )
-        
-        items_to_process = [item for item, exists in zip(data, existent_docs) if not exists]
         # Continue with your existing logic but using `items_to_process`
-        for item in items_to_process:
+        for item in data:
             page_content = {'name': item['name'], 'category': category, 'description': str(item['description'])}
             lenData = len(str(page_content))
             if lenData > self.max_length_allowed:
@@ -103,8 +88,7 @@ class DiscoverFunctionsManager:
                     f"DiscoverFunctionsManager: transform tried to create a function that surpasses the maximum length allowed max_length_allowed: {self.max_length_allowed} vs length of data: {lenData}")
                 continue
             metadata = {
-                "id": random.randint(0, 2**32 - 1),
-                "name": item['name'],
+                "id": self.generate_id_from_name(item['name']),
                 "namespace_id": namespace_id,
                 "extra_index": category,
                 "last_accessed_at": now,
@@ -206,7 +190,7 @@ class DiscoverFunctionsManager:
         """Update the current index with new functions."""
         memory = self.load(auth.api_key)
         try:
-            logging.info("DiscoverFunctionsManager: adding functions to index...")
+            logging.info("DiscoverFunctionsManager: push_functions...")
 
             function_types = ['information_retrieval',
                               'communication',
@@ -219,7 +203,7 @@ class DiscoverFunctionsManager:
             # Transform and concatenate function types
             for func_type in function_types:
                 if func_type in functions:
-                    transformed_functions = await self.transform(memory,
+                    transformed_functions = await self.transform(
                         auth.namespace_id, functions[func_type], func_type)
                     all_docs.extend(transformed_functions)
             ids = [doc.metadata["id"] for doc in all_docs]

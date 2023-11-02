@@ -58,7 +58,6 @@ async def addFunctions(function_inputs: List[AddFunctionInput]):
             return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
         if function_input.auth.namespace_id == '':
             return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
-        logging.info(f'Adding function: {function_input.name}')
         function_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming']
 
         if function_input.category and function_input.category not in function_types:
