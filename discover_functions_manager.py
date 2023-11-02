@@ -5,6 +5,7 @@ import random
 import logging
 import traceback
 import cachetools.func
+import asyncio
 
 from dotenv import load_dotenv
 from qdrant_client import QdrantClient
@@ -21,6 +22,7 @@ from langchain.schema import Document
 from datetime import datetime, timedelta
 from qdrant_client.http.models import PayloadSchemaType
 from functions_and_agents_metadata import AuthAgent
+from concurrent.futures import ThreadPoolExecutor
 
 class DiscoverFunctionsModel(BaseModel):
     query: Optional[str] = None
@@ -69,20 +71,40 @@ class DiscoverFunctionsManager:
             )
             return compression_retriever
 
-    def transform(self, namespace_id, data, category):
+    def parallel_check_documents(self, memory, names):
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            # `executor.map` returns an iterator of results
+            results = executor.map(lambda name: self.get_document_by_name(memory, name), names)
+            # Convert the iterator to a list to get all results
+            results_list = list(results)
+        return results_list
+
+
+    async def transform(self, memory, namespace_id, data, category):
         """Transforms function data for a specific category."""
         now = datetime.now().timestamp()
         result = []
-        for item in data:
-            page_content = {'name': item['name'], 'category': category, 'description': str(
-                item['description'])}
+
+        # Start tasks for all `get_document_by_name` calls
+        names = [item['name'] for item in data]
+        
+        # Get a list of existent documents by consuming the generator
+        existent_docs = await asyncio.get_running_loop().run_in_executor(
+            None, self.parallel_check_documents, memory, names
+        )
+        
+        items_to_process = [item for item, exists in zip(data, existent_docs) if not exists]
+        # Continue with your existing logic but using `items_to_process`
+        for item in items_to_process:
+            page_content = {'name': item['name'], 'category': category, 'description': str(item['description'])}
             lenData = len(str(page_content))
             if lenData > self.max_length_allowed:
                 logging.info(
                     f"DiscoverFunctionsManager: transform tried to create a function that surpasses the maximum length allowed max_length_allowed: {self.max_length_allowed} vs length of data: {lenData}")
                 continue
             metadata = {
-                "id":  random.randint(0, 2**32 - 1),
+                "id": random.randint(0, 2**32 - 1),
+                "name": item['name'],
                 "namespace_id": namespace_id,
                 "extra_index": category,
                 "last_accessed_at": now,
@@ -167,6 +189,9 @@ class DiscoverFunctionsManager:
             kwargs["user_filter"] = filter
         return await memory.aget_relevant_documents(query_str, **kwargs)
 
+    def get_document_by_name(self, memory: ContextualCompressionRetriever, name: str) -> Document:
+        return memory.base_retriever.get_key_value_document("metadata.name", name)
+
     @cachetools.func.ttl_cache(maxsize=16384, ttl=36000)
     def load(self, api_key: str):
         """Load existing index data from the filesystem for a specific user."""
@@ -194,7 +219,7 @@ class DiscoverFunctionsManager:
             # Transform and concatenate function types
             for func_type in function_types:
                 if func_type in functions:
-                    transformed_functions = self.transform(
+                    transformed_functions = await self.transform(memory,
                         auth.namespace_id, functions[func_type], func_type)
                     all_docs.extend(transformed_functions)
             ids = [doc.metadata["id"] for doc in all_docs]

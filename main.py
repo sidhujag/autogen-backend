@@ -9,8 +9,8 @@ from discover_agents_manager import DiscoverAgentsManager, DiscoverAgentsModel
 from functions_and_agents_metadata import FunctionsAndAgentsMetadata, AddFunctionInput, GetAgentModel, DeleteAgentModel, UpsertAgentInput
 from rate_limiter import RateLimiter, SyncRateLimiter
 from typing import List
-rate_limiter = RateLimiter(rate=5, period=1)  # Allow 5 tasks per second
-rate_limiter_sync = SyncRateLimiter(rate=5, period=1)
+rate_limiter = RateLimiter(rate=10, period=1)  # Allow 5 tasks per second
+rate_limiter_sync = SyncRateLimiter(rate=10, period=1)
 # Load environment variables
 load_dotenv()
 
@@ -70,7 +70,10 @@ async def addFunctions(function_inputs: List[AddFunctionInput]):
                 'name': function_input.name,
                 'description': function_input.description
             }
-            functions[function_input.category] = [new_function]
+            if function_input.category in functions:
+                functions[function_input.category].append(new_function)
+            else:
+                functions[function_input.category] = [new_function]
 
     # Push the functions
     result = await functions_and_agents_metadata.set_functions(function_inputs)
@@ -140,7 +143,10 @@ async def upsertAgents(agent_inputs: List[UpsertAgentInput]):
             'name': agent_input.name,
             'description': agent_input.description
         }
-        agents[agent_input.category] = [new_agent]
+        if agent_input.category in agents:
+            agents[agent_input.category].append(new_agent)
+        else:
+            agents[agent_input.category] = [new_agent]
     
     if len(agents) > 0:
         response = await discover_agents_manager.push_agents(agent_input.auth, agents)
