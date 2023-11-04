@@ -196,7 +196,8 @@ class DiscoverFunctionsManager:
                               'communication',
                               'data_processing',
                               'sensory_perception',
-                              'programming']
+                              'programming',
+                              'planning']
 
             all_docs = []
 

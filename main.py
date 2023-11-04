@@ -36,7 +36,7 @@ async def discoverFunctions(function_input: DiscoverFunctionsModel):
         return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
     if function_input.auth.namespace_id == '':
         return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
-    function_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming']
+    function_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning']
 
     if function_input.category != "" and function_input.category not in function_types:
         return {'response': f'Invalid category {function_input.category}, must be one of {function_types}'}
@@ -58,7 +58,7 @@ async def addFunctions(function_inputs: List[AddFunctionInput]):
             return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
         if function_input.auth.namespace_id == '':
             return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
-        function_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming']
+        function_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning']
 
         if function_input.category and function_input.category not in function_types:
             return {'response': f'Invalid category for function {function_input.name}, must be one of {function_types}'}
