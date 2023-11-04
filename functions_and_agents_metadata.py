@@ -31,12 +31,14 @@ class UpsertAgentInput(BaseModel):
     auth: AuthAgent
     human_input_mode: Optional[str] = None
     default_auto_reply: Optional[str] = None
-    description: Optional[str] = None 
+    description: Optional[str] = None
     system_message: Optional[str] = None
-    function_names: Optional[List[str]] = None
+    functions_to_add: Optional[List[str]] = None
+    functions_to_remove: Optional[List[str]] = None
     category: Optional[str] = None
-    agents: Optional[List[str]] = None
-    invitees: Optional[List[str]] = None
+    agents_to_add: Optional[List[str]] = None # agents in group
+    agents_to_remove: Optional[List[str]] = None # agents in group
+    group: Optional[bool] = None
 
 class BaseAgent(BaseModel):
     name: str = Field(default="")
@@ -47,7 +49,7 @@ class BaseAgent(BaseModel):
     system_message: str = Field(default="")
     category: str = Field(default="")
     agents: list = Field(default_factory=list)
-    invitees: list = Field(default_factory=list)
+    group: bool = Field(default=False)
 
 class OpenAIParameter(BaseModel):
     type: str = "object"
@@ -60,10 +62,8 @@ class AddFunctionModel(BaseModel):
     description: str
     parameters: OpenAIParameter = Field(default_factory=OpenAIParameter)
     category: str
-    packages: List[str] = Field(default_factory=list)
     code: str = Field(default="")
     class_name: str = Field(default="")
-
 
 class Agent(BaseAgent):
     functions: List[AddFunctionModel] = Field(default_factory=list)
@@ -77,7 +77,6 @@ class AddFunctionInput(BaseModel):
     description: str
     parameters: OpenAIParameter = OpenAIParameter(type="object", properties={})
     category: str
-    packages: Optional[List[str]] = None
     code: Optional[str] = None
     class_name: Optional[str] = None
     def to_add_function_model_dict(self):
@@ -216,7 +215,6 @@ class FunctionsAndAgentsMetadata:
             agents_docs = await self.rate_limiter.execute(doc_cursor.to_list, length=None)
             agents = [AgentModel(**doc) for doc in agents_docs]
             agents_dict = {(agent.name, agent.auth.namespace_id): agent for agent in agents}
-
             all_function_names = set()
             for agent in agents:
                 all_function_names.update(agent.function_names)
@@ -260,20 +258,36 @@ class FunctionsAndAgentsMetadata:
             operations = []
             for agent_upsert in agents_upsert:
                 # if adding functions then check if they exist first
-                if agent_upsert.function_names:
-                    if not await self.do_functions_exist(agent_upsert.auth.namespace_id, agent_upsert.function_names, session):
+                if agent_upsert.functions_to_add:
+                    if not await self.do_functions_exist(agent_upsert.auth.namespace_id, agent_upsert.functions_to_add, session):
                         return "One of the functions you are trying to add does not exist"
                 query = {
                     "name": agent_upsert.name, 
                     "namespace_id": agent_upsert.auth.namespace_id
                 }
                 update = {
-                    "$set": {k: v for k, v in agent_upsert.dict(exclude_none=True).items() if k != 'function_names'},
-                    "$addToSet": {"function_names": {"$each": agent_upsert.function_names or []}}
+                    "$set": {k: v for k, v in agent_upsert.dict(exclude_none=True).items() if k not in ['functions_to_add', 'functions_to_remove', 'agents_to_add', 'agents_to_remove']},
+                    "$addToSet": {
+                        "function_names": {"$each": agent_upsert.functions_to_add} if agent_upsert.functions_to_add else None,
+                        "agents": {"$each": agent_upsert.agents_to_add} if agent_upsert.agents_to_add else None
+                    },
+                    "$pull": {
+                        "function_names": {"$in": agent_upsert.functions_to_remove} if agent_upsert.functions_to_remove else None,
+                        "agents": {"$in": agent_upsert.agents_to_remove} if agent_upsert.agents_to_remove else None
+                    }
                 }
+                # Clean up the update dict to remove keys with `None` values
+                update["$addToSet"] = {k: v for k, v in update.get("$addToSet", {}).items() if v is not None}
+                update["$pull"] = {k: v for k, v in update.get("$pull", {}).items() if v is not None}
+                
+                # If after cleaning, the dictionaries are empty, remove them from the update
+                if not update["$addToSet"]:
+                    del update["$addToSet"]
+                if not update["$pull"]:
+                    del update["$pull"]
                 update_op = pymongo.UpdateOne(query, update, upsert=True)
                 operations.append(update_op)
-            
+
             if operations:
                 await self.agents_collection.bulk_write(operations, session=session)
             

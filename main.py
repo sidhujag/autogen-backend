@@ -121,6 +121,10 @@ async def upsertAgents(agent_inputs: List[UpsertAgentInput]):
             return {'response': "Error: agent name not provided!", 'elapsed_time': 0}
         if agent_input.description and agent_input.description == '':
             return {'response': "Error: agent description not provided!", 'elapsed_time': 0}
+        if not agent_input.group and (agent_input.agents_to_add or agent_input.agents_to_remove):
+            return {'response': "Error: Cannot manipulate group agents when not a group", 'elapsed_time': 0}
+        if agent_input.agents_to_add and agent_input.agents_to_remove:
+            return {'response': "Error: Cannot add and remove agents from group in the same call", 'elapsed_time': 0}
         if agent_input.category:
             agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'groups', 'user']
             if agent_input.category not in agent_types:
