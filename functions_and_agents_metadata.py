@@ -80,7 +80,7 @@ class AddFunctionModel(BaseModel):
     description: str
     parameters: OpenAIParameter = Field(default_factory=OpenAIParameter)
     category: str
-    code: str = Field(default="")
+    function_code: str = Field(default="")
     class_name: str = Field(default="")
 
 class Agent(BaseAgent):
@@ -95,7 +95,7 @@ class AddFunctionInput(BaseModel):
     description: str
     parameters: OpenAIParameter = OpenAIParameter(type="object", properties={})
     category: str
-    code: Optional[str] = None
+    function_code: Optional[str] = None
     class_name: Optional[str] = None
     def to_add_function_model_dict(self):
         data = self.dict(exclude={"auth"}, exclude_none=True)
