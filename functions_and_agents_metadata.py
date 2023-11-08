@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from rate_limiter import RateLimiter
 from asyncio import Lock
-from typing import List, Optional, Any, Tuple
+from typing import List, Optional, Any, Tuple, Dict
 class AuthAgent(BaseModel):
     api_key: str
     namespace_id: str
@@ -26,6 +26,10 @@ class GetAgentModel(BaseModel):
     name: str
     auth: AuthAgent
 
+class GetGroupModel(BaseModel):
+    name: str
+    auth: AuthAgent
+
 class UpsertAgentInput(BaseModel):
     name: str
     auth: AuthAgent
@@ -36,9 +40,17 @@ class UpsertAgentInput(BaseModel):
     functions_to_add: Optional[List[str]] = None
     functions_to_remove: Optional[List[str]] = None
     category: Optional[str] = None
-    agents_to_add: Optional[List[str]] = None # agents in group
-    agents_to_remove: Optional[List[str]] = None # agents in group
-    group: Optional[bool] = None
+
+class UpsertGroupInput(BaseModel):
+    name: str
+    auth: AuthAgent
+    description: Optional[str] = None
+    agents_to_add: Optional[List[str]] = None
+    agents_to_remove: Optional[List[str]] = None
+    
+class AgentStats(BaseModel):
+    count: int
+    description: str
 
 class BaseAgent(BaseModel):
     name: str = Field(default="")
@@ -48,9 +60,15 @@ class BaseAgent(BaseModel):
     description: str = Field(default="")
     system_message: str = Field(default="")
     category: str = Field(default="")
-    agents: list = Field(default_factory=list)
-    group: bool = Field(default=False)
 
+class BaseGroup(BaseModel):
+    name: str = Field(default="")
+    auth: AuthAgent
+    description: str = Field(default="")
+    agent_names: List[str] = Field(default_factory=list)
+    outgoing: Dict[str, int] = Field(default_factory=dict)
+    incoming: Dict[str, int] = Field(default_factory=dict)
+    
 class OpenAIParameter(BaseModel):
     type: str = "object"
     properties: dict = Field(default_factory=dict)
@@ -84,6 +102,11 @@ class AddFunctionInput(BaseModel):
         data.update(self.auth.to_dict())
         return data
 
+class UpdateComms(BaseModel):
+    auth: AuthAgent
+    sender: str
+    receiver: str
+
 class FunctionsAndAgentsMetadata:
     def __init__(self):
         load_dotenv()  # Load environment variables
@@ -92,6 +115,7 @@ class FunctionsAndAgentsMetadata:
         self.client = None
         self.funcs_collection = None
         self.agents_collection = None
+        self.groups_collection = None
         self.db = None
         self.rate_limiter = None
         self.init_lock = Lock()
@@ -111,6 +135,8 @@ class FunctionsAndAgentsMetadata:
                 await self.funcs_collection.create_index([("name", pymongo.ASCENDING), ("namespace_id", pymongo.ASCENDING)], unique=True)
                 self.agents_collection = self.db['Agents']
                 await self.agents_collection.create_index([("name", pymongo.ASCENDING), ("namespace_id", pymongo.ASCENDING)], unique=True)
+                self.groups_collection = self.db['Groups']
+                await self.groups_collection.create_index([("name", pymongo.ASCENDING), ("namespace_id", pymongo.ASCENDING)], unique=True)
                 self.rate_limiter = RateLimiter(rate=10, period=1)
                 
             except Exception as e:
@@ -125,9 +151,20 @@ class FunctionsAndAgentsMetadata:
             count = await self.funcs_collection.count_documents(query, session=session)
             return count == len(function_names)
         except Exception as e:
-            logging.warn(f"FunctionsAndAgentsMetadata: pull_functions exception {e}\n{traceback.format_exc()}")
+            logging.warn(f"FunctionsAndAgentsMetadata: do_functions_exist exception {e}\n{traceback.format_exc()}")
             return False
 
+    async def do_agents_exist(self, namespace_id: str, agent_names: List[str], session) -> bool:
+        if self.client is None or self.agents_collection is None or self.rate_limiter is None:
+            await self.initialize()
+
+        try:
+            query = {"name": {"$in": agent_names}, "namespace_id": namespace_id}
+            count = await self.agents_collection.count_documents(query, session=session)
+            return count == len(agent_names)
+        except Exception as e:
+            logging.warn(f"FunctionsAndAgentsMetadata: do_agents_exist exception {e}\n{traceback.format_exc()}")
+            return False
 
     async def pull_functions(self, namespace_id: str, function_names: List[str], session=None) -> List[AddFunctionModel]:
         if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
@@ -248,6 +285,50 @@ class FunctionsAndAgentsMetadata:
         finally:
             session.end_session()
 
+    async def update_comms(self, agent_input: UpdateComms):
+        if self.client is None or self.groups_collection is None or self.rate_limiter is None:
+            await self.initialize()
+
+        async with await self.client.start_session() as session:
+            session.start_transaction()
+            try:
+                # Prepare the updates for outgoing and incoming message counts
+                sender_outgoing_count_field = f"outgoing.{agent_input.receiver}"
+                receiver_incoming_count_field = f"incoming.{agent_input.sender}"
+
+                # Update the outgoing count for the sender
+                sender_update = pymongo.UpdateOne(
+                    {"name": agent_input.sender, "namespace_id": agent_input.auth.namespace_id},
+                    {
+                        "$inc": {sender_outgoing_count_field: 1},
+                        "$setOnInsert": {"name": agent_input.sender, "namespace_id": agent_input.auth.namespace_id}
+                    },
+                    upsert=True
+                )
+                
+                # Update the incoming count for the receiver
+                receiver_update = pymongo.UpdateOne(
+                    {"name": agent_input.receiver, "namespace_id": agent_input.auth.namespace_id},
+                    {
+                        "$inc": {receiver_incoming_count_field: 1},
+                        "$setOnInsert": {"name": agent_input.receiver, "namespace_id": agent_input.auth.namespace_id}
+                    },
+                    upsert=True
+                )
+
+                operations = [sender_update, receiver_update]
+                if operations:
+                    await self.groups_collection.bulk_write(operations, session=session)
+                
+                await session.commit_transaction()
+                return "success"
+            except PyMongoError as e:
+                await session.abort_transaction()
+                logging.warn(f"update_comms exception {e}\n{traceback.format_exc()}")
+                return f"MongoDB error occurred: {str(e)}"
+            finally:
+                session.end_session()
+
     async def upsert_agents(self, agents_upsert: List[UpsertAgentInput]):
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
@@ -266,14 +347,12 @@ class FunctionsAndAgentsMetadata:
                     "namespace_id": agent_upsert.auth.namespace_id
                 }
                 update = {
-                    "$set": {k: v for k, v in agent_upsert.dict(exclude_none=True).items() if k not in ['functions_to_add', 'functions_to_remove', 'agents_to_add', 'agents_to_remove']},
+                    "$set": {k: v for k, v in agent_upsert.dict(exclude_none=True).items() if k not in ['functions_to_add', 'functions_to_remove']},
                     "$addToSet": {
-                        "function_names": {"$each": agent_upsert.functions_to_add} if agent_upsert.functions_to_add else None,
-                        "agents": {"$each": agent_upsert.agents_to_add} if agent_upsert.agents_to_add else None
+                        "function_names": {"$each": agent_upsert.functions_to_add} if agent_upsert.functions_to_add else None
                     },
                     "$pull": {
-                        "function_names": {"$in": agent_upsert.functions_to_remove} if agent_upsert.functions_to_remove else None,
-                        "agents": {"$in": agent_upsert.agents_to_remove} if agent_upsert.agents_to_remove else None
+                        "function_names": {"$in": agent_upsert.functions_to_remove} if agent_upsert.functions_to_remove else None
                     }
                 }
                 # Clean up the update dict to remove keys with `None` values
@@ -330,5 +409,86 @@ class FunctionsAndAgentsMetadata:
             session.end_session()
 
 
+    async def upsert_groups(self, groups_upsert: List[UpsertGroupInput]):
+        if self.client is None or self.groups_collection is None or self.rate_limiter is None:
+            await self.initialize()
+
+        session = await self.client.start_session()
+        session.start_transaction()
+        try:
+            operations = []
+            for group_upsert in groups_upsert:
+                # if adding groups then check if they exist first
+                if group_upsert.agents_to_add:
+                    if not await self.do_agents_exist(group_upsert.auth.namespace_id, group_upsert.agents_to_add, session):
+                        return "One of the agents you are trying to add does not exist"
+                query = {
+                    "name": group_upsert.name, 
+                    "namespace_id": group_upsert.auth.namespace_id
+                }
+                update = {
+                    "$set": {k: v for k, v in group_upsert.dict(exclude_none=True).items() if k not in ['agents_to_add', 'agents_to_remove']},
+                    "$addToSet": {
+                        "agent_names": {"$each": group_upsert.agents_to_add} if group_upsert.agents_to_add else None
+                    },
+                    "$pull": {
+                        "agent_names": {"$in": group_upsert.agents_to_remove} if group_upsert.agents_to_remove else None
+                    }
+                }
+                # Clean up the update dict to remove keys with `None` values
+                update["$addToSet"] = {k: v for k, v in update.get("$addToSet", {}).items() if v is not None}
+                update["$pull"] = {k: v for k, v in update.get("$pull", {}).items() if v is not None}
+                
+                # If after cleaning, the dictionaries are empty, remove them from the update
+                if not update["$addToSet"]:
+                    del update["$addToSet"]
+                if not update["$pull"]:
+                    del update["$pull"]
+                update_op = pymongo.UpdateOne(query, update, upsert=True)
+                operations.append(update_op)
+
+            if operations:
+                await self.groups_collection.bulk_write(operations, session=session)
+            
+            await session.commit_transaction()
+            return "success"
+        except PyMongoError as e:
+            logging.warn(f"FunctionsAndAgentsMetadata: upsert_groups exception {e}\n{traceback.format_exc()}")
+            return f"MongoDB error occurred while upserting groups: {str(e)}"
+        except Exception as e:
+            await session.abort_transaction()
+            logging.warn(f"FunctionsAndAgentsMetadata: upsert_groups exception {e}\n{traceback.format_exc()}")
+            return str(e)
+        finally:
+            session.end_session()
 
 
+    async def get_groups(self, group_inputs: List[GetGroupModel]) -> Tuple[List[BaseGroup], str]:
+        if not group_inputs:
+            return [], "Group input list is empty"
+        
+        if self.client is None or self.groups_collection is None or self.rate_limiter is None:
+            await self.initialize()
+
+        session = await self.client.start_session()
+        session.start_transaction(read_concern=pymongo.read_concern.ReadConcern("snapshot"))
+
+        try:
+            unique_groups = {(group_input.name, group_input.auth.namespace_id) for group_input in group_inputs}
+            names, namespace_ids = zip(*unique_groups)
+            query = {"name": {"$in": names}, "namespace_id": {"$in": namespace_ids}}
+            doc_cursor = self.groups_collection.find(query, session=session)
+            groups_docs = await self.rate_limiter.execute(doc_cursor.to_list, length=None)
+            groups = [BaseGroup(**doc) for doc in groups_docs]
+            await session.commit_transaction()
+            return groups, None
+        except PyMongoError as e:
+            await session.abort_transaction()
+            logging.warn(f"FunctionsAndGroupsMetadata: get_groups exception {e}\n{traceback.format_exc()}")
+            return [], f"MongoDB error occurred while retrieving groups: {str(e)}"
+        except Exception as e:
+            await session.abort_transaction()
+            logging.warn(f"FunctionsAndGroupsMetadata: get_groups exception {e}\n{traceback.format_exc()}")
+            return [], f"Error occurred while retrieving groups: {str(e)}"
+        finally:
+            session.end_session()

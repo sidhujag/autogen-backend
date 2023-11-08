@@ -6,7 +6,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from discover_functions_manager import DiscoverFunctionsManager, DiscoverFunctionsModel
 from discover_agents_manager import DiscoverAgentsManager, DiscoverAgentsModel
-from functions_and_agents_metadata import FunctionsAndAgentsMetadata, AddFunctionInput, GetAgentModel, DeleteAgentModel, UpsertAgentInput
+from discover_groups_manager import DiscoverGroupsManager, DiscoverGroupsModel
+from functions_and_agents_metadata import FunctionsAndAgentsMetadata, GetGroupModel, UpsertGroupInput, UpdateComms, AddFunctionInput, GetAgentModel, DeleteAgentModel, UpsertAgentInput
 from rate_limiter import RateLimiter, SyncRateLimiter
 from typing import List
 rate_limiter = RateLimiter(rate=10, period=1)  # Allow 5 tasks per second
@@ -25,6 +26,7 @@ logging.basicConfig(filename=LOGFILE_PATH, filemode='w',
 
 discover_functions_manager = DiscoverFunctionsManager(rate_limiter, rate_limiter_sync)
 discover_agents_manager = DiscoverAgentsManager(rate_limiter, rate_limiter_sync)
+discover_groups_manager = DiscoverGroupsManager(rate_limiter, rate_limiter_sync)
 functions_and_agents_metadata = FunctionsAndAgentsMetadata()
 
 
@@ -121,12 +123,8 @@ async def upsertAgents(agent_inputs: List[UpsertAgentInput]):
             return {'response': "Error: agent name not provided!", 'elapsed_time': 0}
         if agent_input.description and agent_input.description == '':
             return {'response': "Error: agent description not provided!", 'elapsed_time': 0}
-        if not agent_input.group and (agent_input.agents_to_add or agent_input.agents_to_remove):
-            return {'response': "Error: Cannot manipulate group agents when not a group", 'elapsed_time': 0}
-        if agent_input.agents_to_add and agent_input.agents_to_remove:
-            return {'response': "Error: Cannot add and remove agents from group in the same call", 'elapsed_time': 0}
         if agent_input.category:
-            agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'groups', 'user']
+            agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'user']
             if agent_input.category not in agent_types:
                 return {'response': f'Invalid category for agent {agent_input.name}, must be one of {agent_types}', 'elapsed_time': 0}
         if agent_input.human_input_mode:
@@ -152,19 +150,35 @@ async def upsertAgents(agent_inputs: List[UpsertAgentInput]):
             agents[agent_input.category] = [new_agent]
     
     if len(agents) > 0:
-        response = await discover_agents_manager.push_agents(agent_input.auth, agents)
+        response = await discover_agents_manager.push_agents(agent_inputs[0].auth, agents)
+    end = time.time()
+    return {'response': response, 'elapsed_time': end-start}
+
+
+@app.post('/update_communication_stats/')
+async def updateComms(comms_input: UpdateComms):
+    """Endpoint to update communication (incoming/outgoing) stats an agent."""
+    start = time.time()
+    if not comms_input.sender or not comms_input.receiver:
+        return {'response': "Error: sender and receiver not provided", 'elapsed_time': 0}
+    if comms_input.auth.namespace_id == '':
+        return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
+    response = await functions_and_agents_metadata.update_comms(comms_input)
+    if response != "success":
+        end = time.time()
+        return {'response': response, 'elapsed_time': end-start}
     end = time.time()
     return {'response': response, 'elapsed_time': end-start}
 
 @app.post('/discover_agents/')
 async def discoverAgents(agent_input: DiscoverAgentsModel):
-    """Endpoint to upsert an agent."""
+    """Endpoint to discover agents."""
     start = time.time()
     if agent_input.auth.api_key == '':
         return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
     if agent_input.auth.namespace_id == '':
         return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
-    agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'groups', 'user']
+    agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'user']
 
     if agent_input.category != "" and agent_input.category not in agent_types:
         return {'response': f'Invalid category {agent_input.category}, must be one of {agent_types}'}
@@ -172,6 +186,77 @@ async def discoverAgents(agent_input: DiscoverAgentsModel):
     result = await discover_agents_manager.pull_agents(agent_input)
     end = time.time()
     return {'response': result, 'elapsed_time': end-start}
+
+@app.post('/discover_groups/')
+async def discoverGroups(group_input: DiscoverGroupsModel):
+    """Endpoint to discover groups."""
+    start = time.time()
+    if group_input.auth.api_key == '':
+        return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
+    if group_input.auth.namespace_id == '':
+        return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
+
+    result = await discover_groups_manager.pull_groups(group_input)
+    end = time.time()
+    return {'response': result, 'elapsed_time': end-start}
+
+@app.post('/get_groups/')
+async def getGroups(group_inputs: List[GetGroupModel]):
+    """Endpoint to get group info."""
+    start = time.time()
+    for group_input in group_inputs:
+        if group_input.auth.api_key == '':
+            return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
+        if group_input.auth.namespace_id == '':
+            return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
+        if group_input.name == '':
+            return {'response': "Error: group name not provided!", 'elapsed_time': 0}
+    response, err = await functions_and_agents_metadata.get_groups(group_inputs)
+    if err is not None:
+        for group in group_inputs:
+            group.auth.namespace_id = ""
+        response, err = await functions_and_agents_metadata.get_groups(group_inputs)
+        if err is not None:
+            response = err
+    end = time.time()
+    return {'response': response, 'elapsed_time': end-start}
+
+@app.post('/upsert_groups/')
+async def upsertGroups(group_inputs: List[UpsertGroupInput]):
+    """Endpoint to upsert group."""
+    if len(group_inputs) == 0:
+        return {'response': "Error: No groups provided", 'elapsed_time': 0}
+    start = time.time()
+    groups = []
+    for group_input in group_inputs:
+        if group_input.auth.api_key == '':
+            return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
+        if group_input.auth.namespace_id == '':
+            return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
+        if group_input.name == '':
+            return {'response': "Error: group name not provided!", 'elapsed_time': 0}
+        if group_input.description and group_input.description == '':
+            return {'response': "Error: group description not provided!", 'elapsed_time': 0}
+
+    # Push the group
+    response = await functions_and_agents_metadata.upsert_groups(group_inputs)
+    if response != "success":
+        end = time.time()
+        return {'response': response, 'elapsed_time': end-start}
+    for group_input in group_inputs:
+        if not group_input.description:
+            continue
+        new_group = {
+            'name': group_input.name,
+            'description': group_input.description
+        }
+        groups.append(new_group)
+    
+    if len(groups) > 0:
+        response = await discover_groups_manager.push_groups(group_inputs[0].auth, groups)
+    end = time.time()
+    return {'response': response, 'elapsed_time': end-start}
+
 
 @app.post('/delete_agents/')
 async def deleteAgent(agent_inputs: List[DeleteAgentModel]):
