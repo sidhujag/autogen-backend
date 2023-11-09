@@ -356,8 +356,15 @@ class FunctionsAndAgentsMetadata:
                         "function_names": {"$in": agent_upsert.functions_to_remove} if agent_upsert.functions_to_remove else None
                     }
                 }
-                # Clean up the update dict to remove keys with `None` values for `$addToSet` and `$pull`
-                update = {k: v for k, v in update.items() if v is not None and (v != {} or k not in ["$addToSet", "$pull"])}
+                # Clean up the update dict to remove keys with `None` values
+                update["$addToSet"] = {k: v for k, v in update.get("$addToSet", {}).items() if v is not None}
+                update["$pull"] = {k: v for k, v in update.get("$pull", {}).items() if v is not None}
+                
+                # If after cleaning, the dictionaries are empty, remove them from the update
+                if not update["$addToSet"]:
+                    del update["$addToSet"]
+                if not update["$pull"]:
+                    del update["$pull"]
                 update_op = pymongo.UpdateOne(
                     {"name": agent_upsert.name, "namespace_id": agent_upsert.auth.namespace_id},
                     update,
@@ -417,8 +424,15 @@ class FunctionsAndAgentsMetadata:
                         "agent_names": {"$in": group_upsert.agents_to_remove} if group_upsert.agents_to_remove else None
                     }
                 }
-                # Clean up the update dict to remove keys with `None` values for `$addToSet` and `$pull`
-                update = {k: v for k, v in update.items() if v is not None and (v != {} or k not in ["$addToSet", "$pull"])}
+                # Clean up the update dict to remove keys with `None` values
+                update["$addToSet"] = {k: v for k, v in update.get("$addToSet", {}).items() if v is not None}
+                update["$pull"] = {k: v for k, v in update.get("$pull", {}).items() if v is not None}
+                
+                # If after cleaning, the dictionaries are empty, remove them from the update
+                if not update["$addToSet"]:
+                    del update["$addToSet"]
+                if not update["$pull"]:
+                    del update["$pull"]
                 update_op = pymongo.UpdateOne(query, update, upsert=True)
                 operations.append(update_op)
 
