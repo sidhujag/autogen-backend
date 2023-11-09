@@ -100,7 +100,10 @@ class DiscoverFunctionsManager:
             result.append(doc)
         return result
 
-    def extract_name_and_category(self, documents):
+    def _get_short_description(self, full_description: str) -> str:
+        return (full_description[:75] + '...') if len(full_description) > 75 else full_description
+
+    def extract_details(self, documents):
         result = []
         seen = set()  # Track seen combinations of name and category
         for doc in documents:
@@ -108,10 +111,11 @@ class DiscoverFunctionsManager:
             text = json.loads(doc.page_content)
             name = text.get('name')
             category = text.get('category')
+            description = text.get('description')
 
             # Check if this combination has been seen before
             if (name, category) not in seen:
-                result.append({'name': name, 'category': category})
+                result.append({'name': name, 'category': category, 'description': self._get_short_description(description)})
                 seen.add((name, category))  # Mark this combination as seen
 
         return result
@@ -131,7 +135,7 @@ class DiscoverFunctionsManager:
             documents = await self.get_retrieved_nodes(memory,
                 function_input.query, function_input.category, function_input.auth.namespace_id)
             if len(documents) > 0:
-                parsed_response = self.extract_name_and_category(documents)
+                parsed_response = self.extract_details(documents)
                 response.append(parsed_response)
                 # update last_accessed_at
                 ids = [doc.metadata["id"] for doc in documents]

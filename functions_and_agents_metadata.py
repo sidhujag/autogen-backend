@@ -196,7 +196,7 @@ class FunctionsAndAgentsMetadata:
                 session.end_session()
 
 
-    async def set_functions(self, functions: List[AddFunctionInput]) -> Tuple[str, float]:
+    async def upsert_functions(self, functions: List[AddFunctionInput]) -> Tuple[str, float]:
         if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
             await self.initialize()
 
@@ -492,3 +492,31 @@ class FunctionsAndAgentsMetadata:
             return [], f"Error occurred while retrieving groups: {str(e)}"
         finally:
             session.end_session()
+            
+    async def get_agent_groups(self, agent_names: List[str], namespace_id: str) -> Dict[str, List[str]]:
+        if self.client is None or self.groups_collection is None or self.rate_limiter is None:
+            await self.initialize()
+
+        try:
+            # Query the groups collection for groups that contain any of the agent names
+            query = {
+                "agent_names": {"$in": agent_names},
+                "namespace_id": namespace_id
+            }
+            doc_cursor = self.groups_collection.find(query)
+            groups_docs = await self.rate_limiter.execute(doc_cursor.to_list, length=None)
+            
+            # Create a mapping of agent names to group names
+            agent_groups = {name: [] for name in agent_names}
+            for doc in groups_docs:
+                for agent_name in doc['agent_names']:
+                    if agent_name in agent_groups:
+                        agent_groups[agent_name].append(doc['name'])
+
+            return agent_groups
+        except PyMongoError as e:
+            logging.warn(f"FunctionsAndAgentsMetadata: get_agent_groups exception {e}\n{traceback.format_exc()}")
+            return {}
+        except Exception as e:
+            logging.warn(f"FunctionsAndAgentsMetadata: get_agent_groups exception {e}\n{traceback.format_exc()}")
+            return {}

@@ -48,9 +48,9 @@ async def discoverFunctions(function_input: DiscoverFunctionsModel):
     end = time.time()
     return {'response': result, 'elapsed_time': end-start}
 
-@app.post('/add_functions/')
-async def addFunctions(function_inputs: List[AddFunctionInput]):
-    """Endpoint to push functions based on provided functions."""
+@app.post('/upsert_functions/')
+async def upsertFunctions(function_inputs: List[AddFunctionInput]):
+    """Endpoint to upsert functions based on provided functions."""
     start = time.time()
     if len(function_inputs) == 0:
         return {'response': "Error: No functions provided", 'elapsed_time': 0}
@@ -77,7 +77,7 @@ async def addFunctions(function_inputs: List[AddFunctionInput]):
                 functions[function_input.category] = [new_function]
 
     # Push the functions
-    result = await functions_and_agents_metadata.set_functions(function_inputs)
+    result = await functions_and_agents_metadata.upsert_functions(function_inputs)
     if result != "success":
         end = time.time()
         return {'response': result, 'elapsed_time': end-start}
@@ -184,6 +184,21 @@ async def discoverAgents(agent_input: DiscoverAgentsModel):
         return {'response': f'Invalid category {agent_input.category}, must be one of {agent_types}'}
 
     result = await discover_agents_manager.pull_agents(agent_input)
+    
+    # Flatten the result if it's a list of lists
+    if result and isinstance(result[0], list):
+        result = [item for sublist in result for item in sublist]
+
+    # Extract agent names from the result
+    agent_names = [agent['name'] for agent in result if 'name' in agent]
+
+    # Get the groups for these agents
+    agent_groups = await functions_and_agents_metadata.get_agent_groups(agent_names, agent_input.auth.namespace_id)
+
+    # Add the group names to the result
+    for agent in result:
+        agent['group_names'] = agent_groups.get(agent['name'], [])
+
     end = time.time()
     return {'response': result, 'elapsed_time': end-start}
 
