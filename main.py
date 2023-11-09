@@ -90,6 +90,8 @@ async def upsertFunctions(function_inputs: List[AddFunctionInput]):
 async def getAgents(agent_inputs: List[GetAgentModel]):
     """Endpoint to get agent."""
     start = time.time()
+    if len(agent_inputs) == 0:
+        return {'response': "Error: No agents provided", 'elapsed_time': 0}
     for agent in agent_inputs:
         if agent.auth.api_key == '':
             return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
@@ -219,6 +221,8 @@ async def discoverGroups(group_input: DiscoverGroupsModel):
 async def getGroups(group_inputs: List[GetGroupModel]):
     """Endpoint to get group info."""
     start = time.time()
+    if len(group_inputs) == 0:
+        return {'response': "Error: No groups provided", 'elapsed_time': 0}
     for group_input in group_inputs:
         if group_input.auth.api_key == '':
             return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}

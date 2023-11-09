@@ -195,45 +195,6 @@ class FunctionsAndAgentsMetadata:
             if own_session:
                 session.end_session()
 
-
-    async def upsert_functions(self, functions: List[AddFunctionInput]) -> Tuple[str, float]:
-        if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
-            await self.initialize()
-
-        operations = []
-        for function in functions:
-            function_model_data = function.to_add_function_model_dict()
-            function_model = AddFunctionModel(**function_model_data)
-
-            update_op = pymongo.UpdateOne(
-                {"name": function.name, "namespace_id": function.auth.namespace_id},
-                {"$set": function_model.dict()},
-                upsert=True
-            )
-            operations.append(update_op)
-
-        if operations:
-            session = await self.client.start_session()
-            session.start_transaction()
-            try:
-                await self.rate_limiter.execute(
-                    self.funcs_collection.bulk_write,
-                    operations,
-                    session=session
-                )
-                await session.commit_transaction()
-                return "success"
-            except PyMongoError as e:
-                await session.abort_transaction()
-                logging.warn(f"FunctionsAndAgentsMetadata: set_functions exception {e}\n{traceback.format_exc()}")
-                return f"MongoDB error occurred while adding functions: {str(e)}"
-            except Exception as e:
-                await session.abort_transaction()
-                return f"FunctionsAndAgentsMetadata: set_functions exception {e}\n{traceback.format_exc()}"
-            finally:
-                session.end_session()
-        return "No functions were provided."
-
     async def get_agents(self, agent_inputs: List[GetAgentModel], resolve_functions: bool = True) -> Tuple[List[AgentModel], str]:
         if not agent_inputs:
             return [], "Agent input list is empty"
@@ -329,6 +290,48 @@ class FunctionsAndAgentsMetadata:
             finally:
                 session.end_session()
 
+    async def upsert_functions(self, functions: List[AddFunctionInput]) -> str:
+        if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
+            await self.initialize()
+
+        operations = []
+        for function in functions:
+            function_model_data = function.to_add_function_model_dict()
+            function_model = AddFunctionModel(**function_model_data)
+
+            update_op = pymongo.UpdateOne(
+                {"name": function.name, "namespace_id": function.auth.namespace_id},
+                {"$set": function_model.dict()},
+                upsert=True
+            )
+            operations.append(update_op)
+
+        if operations:
+            session = await self.client.start_session()
+            session.start_transaction()
+            try:
+                result = await self.rate_limiter.execute(
+                    self.funcs_collection.bulk_write,
+                    operations,
+                    session=session
+                )
+                await session.commit_transaction()
+
+                # Check if anything was actually modified or upserted
+                if result.modified_count + result.upserted_count == 0:
+                    return "No functions were upserted, no changes found!"
+                return "success"
+            except PyMongoError as e:
+                await session.abort_transaction()
+                logging.warn(f"FunctionsAndAgentsMetadata: set_functions exception {e}\n{traceback.format_exc()}")
+                return f"MongoDB error occurred while adding functions: {str(e)}"
+            except Exception as e:
+                await session.abort_transaction()
+                return f"FunctionsAndAgentsMetadata: set_functions exception {e}\n{traceback.format_exc()}"
+            finally:
+                session.end_session()
+        return "No functions were provided."
+
     async def upsert_agents(self, agents_upsert: List[UpsertAgentInput]):
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
@@ -368,7 +371,14 @@ class FunctionsAndAgentsMetadata:
                 operations.append(update_op)
 
             if operations:
-                await self.agents_collection.bulk_write(operations, session=session)
+                result = await self.rate_limiter.execute(
+                    self.agents_collection.bulk_write,
+                    operations,
+                    session=session
+                )
+                # Check if anything was actually modified or upserted
+                if result.modified_count + result.upserted_count == 0:
+                    return "No agents were upserted, no changes found!"
             
             await session.commit_transaction()
             return "success"
@@ -381,33 +391,6 @@ class FunctionsAndAgentsMetadata:
             return str(e)
         finally:
             session.end_session()
-
-    async def delete_agents(self, agents_delete: List[DeleteAgentModel]):
-        if not agents_delete:
-            return "Agent delete list is empty"
-        
-        if self.client is None or self.agents_collection is None or self.rate_limiter is None:
-            await self.initialize()
-
-        queries = [{"name": agent_delete.name, "namespace_id": agent_delete.auth.namespace_id} for agent_delete in agents_delete]
-        session = await self.client.start_session()
-        try:
-            async with session.start_transaction():
-                # Perform the delete operations in batch
-                delete_result = await self.agents_collection.delete_many({"$or": queries}, session=session)
-                
-                if delete_result.deleted_count == 0:
-                    return "No agents found or user not authorized to delete."
-                elif delete_result.deleted_count < len(agents_delete):
-                    return "Some agents were not found or user not authorized to delete."
-                
-                return "success"
-        except Exception as e:
-            logging.warn(f"FunctionsAndAgentsMetadata: delete_agents exception {e}\n{traceback.format_exc()}")
-            return str(e)
-        finally:
-            session.end_session()
-
 
     async def upsert_groups(self, groups_upsert: List[UpsertGroupInput]):
         if self.client is None or self.groups_collection is None or self.rate_limiter is None:
@@ -448,7 +431,14 @@ class FunctionsAndAgentsMetadata:
                 operations.append(update_op)
 
             if operations:
-                await self.groups_collection.bulk_write(operations, session=session)
+                result = await self.rate_limiter.execute(
+                    self.groups_collection.bulk_write,
+                    operations,
+                    session=session
+                )
+                # Check if anything was actually modified or upserted
+                if result.modified_count + result.upserted_count == 0:
+                    return "No groups were upserted, no changes found!"
             
             await session.commit_transaction()
             return "success"
@@ -462,6 +452,31 @@ class FunctionsAndAgentsMetadata:
         finally:
             session.end_session()
 
+    async def delete_agents(self, agents_delete: List[DeleteAgentModel]):
+        if not agents_delete:
+            return "Agent delete list is empty"
+        
+        if self.client is None or self.agents_collection is None or self.rate_limiter is None:
+            await self.initialize()
+
+        queries = [{"name": agent_delete.name, "namespace_id": agent_delete.auth.namespace_id} for agent_delete in agents_delete]
+        session = await self.client.start_session()
+        try:
+            async with session.start_transaction():
+                # Perform the delete operations in batch
+                delete_result = await self.agents_collection.delete_many({"$or": queries}, session=session)
+                
+                if delete_result.deleted_count == 0:
+                    return "No agents found or user not authorized to delete."
+                elif delete_result.deleted_count < len(agents_delete):
+                    return "Some agents were not found or user not authorized to delete."
+                
+                return "success"
+        except Exception as e:
+            logging.warn(f"FunctionsAndAgentsMetadata: delete_agents exception {e}\n{traceback.format_exc()}")
+            return str(e)
+        finally:
+            session.end_session()
 
     async def get_groups(self, group_inputs: List[GetGroupModel]) -> Tuple[List[BaseGroup], str]:
         if not group_inputs:
@@ -492,7 +507,7 @@ class FunctionsAndAgentsMetadata:
             return [], f"Error occurred while retrieving groups: {str(e)}"
         finally:
             session.end_session()
-            
+ 
     async def get_agent_groups(self, agent_names: List[str], namespace_id: str) -> Dict[str, List[str]]:
         if self.client is None or self.groups_collection is None or self.rate_limiter is None:
             await self.initialize()
