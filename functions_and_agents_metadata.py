@@ -343,6 +343,16 @@ class FunctionsAndAgentsMetadata:
         try:
             session.start_transaction()
             for agent_upsert in agents_upsert:
+                # Check if the agent exists
+                existing_agent = await self.agents_collection.find_one(
+                    {"name": agent_upsert.name, "namespace_id": agent_upsert.auth.namespace_id},
+                    session=session
+                )
+
+                # If it's a new agent and no category is provided, fail the operation
+                if not existing_agent and agent_upsert.category is None:
+                    await session.abort_transaction()
+                    return "New agents must have a category defined."
                 if agent_upsert.functions_to_add:
                     if not await self.do_functions_exist(agent_upsert.auth.namespace_id, agent_upsert.functions_to_add, session):
                         return "One of the functions you are trying to add does not exist"
