@@ -128,7 +128,7 @@ class DiscoverAgentsManager:
             try:
                 self.client.get_collection(self.collection_name)
             except Exception as e:
-                logging.warn(f"DiscoverAgentsManager: pull_agents exception {e}\n{traceback.format_exc()}")
+                logging.warning(f"DiscoverAgentsManager: pull_agents exception {e}\n{traceback.format_exc()}")
                 self.inited = True
         memory = self.load(agent_input.auth.api_key)
         response = []
@@ -146,7 +146,7 @@ class DiscoverAgentsManager:
                 await self.rate_limiter.execute(memory.base_retriever.vectorstore.aadd_documents, documents, ids=ids)
                 #loop.run_in_executor(None, self.prune_agents)
         except Exception as e:
-            logging.warn(f"DiscoverAgentsManager: pull_agents exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"DiscoverAgentsManager: pull_agents exception {e}\n{traceback.format_exc()}")
         finally:
             return response
 
@@ -217,7 +217,7 @@ class DiscoverAgentsManager:
             ids = [doc.metadata["id"] for doc in all_docs]
             await self.rate_limiter.execute(memory.base_retriever.vectorstore.aadd_documents, all_docs, ids=ids)
         except Exception as e:
-            logging.warn(f"DiscoverAgentsManager: push_agents exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"DiscoverAgentsManager: push_agents exception {e}\n{traceback.format_exc()}")
         finally:
             return "success"
 
@@ -238,7 +238,7 @@ class DiscoverAgentsManager:
         try:
             attempt_prune()
         except Exception as e:
-            logging.warn(f"DiscoverAgentsManager: prune_agents exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"DiscoverAgentsManager: prune_agents exception {e}\n{traceback.format_exc()}")
             # Attempt a second prune after reload
             try:
                 attempt_prune()

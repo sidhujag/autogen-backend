@@ -140,7 +140,7 @@ class FunctionsAndAgentsMetadata:
                 self.rate_limiter = RateLimiter(rate=10, period=1)
                 
             except Exception as e:
-                logging.warn(f"FunctionsAndAgentsMetadata: initialize exception {e}\n{traceback.format_exc()}")
+                logging.warning(f"FunctionsAndAgentsMetadata: initialize exception {e}\n{traceback.format_exc()}")
 
     async def do_functions_exist(self, namespace_id: str, function_names: List[str], session) -> bool:
         if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
@@ -151,7 +151,7 @@ class FunctionsAndAgentsMetadata:
             count = await self.funcs_collection.count_documents(query, session=session)
             return count == len(function_names)
         except Exception as e:
-            logging.warn(f"FunctionsAndAgentsMetadata: do_functions_exist exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"FunctionsAndAgentsMetadata: do_functions_exist exception {e}\n{traceback.format_exc()}")
             return False
 
     async def do_agents_exist(self, namespace_id: str, agent_names: List[str], session) -> bool:
@@ -163,7 +163,7 @@ class FunctionsAndAgentsMetadata:
             count = await self.agents_collection.count_documents(query, session=session)
             return count == len(agent_names)
         except Exception as e:
-            logging.warn(f"FunctionsAndAgentsMetadata: do_agents_exist exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"FunctionsAndAgentsMetadata: do_agents_exist exception {e}\n{traceback.format_exc()}")
             return False
 
     async def pull_functions(self, namespace_id: str, function_names: List[str], session=None) -> List[AddFunctionModel]:
@@ -189,7 +189,7 @@ class FunctionsAndAgentsMetadata:
         except Exception as e:
             if own_session:
                 await session.abort_transaction()
-            logging.warn(f"FunctionsAndAgentsMetadata: pull_functions exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"FunctionsAndAgentsMetadata: pull_functions exception {e}\n{traceback.format_exc()}")
             return []
         finally:
             if own_session:
@@ -237,11 +237,11 @@ class FunctionsAndAgentsMetadata:
             return results, None
         except PyMongoError as e:
             await session.abort_transaction()
-            logging.warn(f"FunctionsAndAgentsMetadata: get_agents exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"FunctionsAndAgentsMetadata: get_agents exception {e}\n{traceback.format_exc()}")
             return [], f"MongoDB error occurred while retrieving agents: {str(e)}"
         except Exception as e:
             await session.abort_transaction()
-            logging.warn(f"FunctionsAndAgentsMetadata: get_agents exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"FunctionsAndAgentsMetadata: get_agents exception {e}\n{traceback.format_exc()}")
             return [], f"Error occurred while retrieving agents: {str(e)}"
         finally:
             session.end_session()
@@ -285,7 +285,7 @@ class FunctionsAndAgentsMetadata:
                 return "success"
             except PyMongoError as e:
                 await session.abort_transaction()
-                logging.warn(f"update_comms exception {e}\n{traceback.format_exc()}")
+                logging.warning(f"update_comms exception {e}\n{traceback.format_exc()}")
                 return f"MongoDB error occurred: {str(e)}"
             finally:
                 session.end_session()
@@ -298,7 +298,6 @@ class FunctionsAndAgentsMetadata:
         for function in functions:
             function_model_data = function.to_add_function_model_dict()
             function_model = AddFunctionModel(**function_model_data)
-
             update_op = pymongo.UpdateOne(
                 {"name": function.name, "namespace_id": function.auth.namespace_id},
                 {"$set": function_model.dict()},
@@ -308,8 +307,8 @@ class FunctionsAndAgentsMetadata:
 
         if operations:
             session = await self.client.start_session()
-            session.start_transaction()
             try:
+                session.start_transaction()
                 result = await self.rate_limiter.execute(
                     self.funcs_collection.bulk_write,
                     operations,
@@ -319,38 +318,37 @@ class FunctionsAndAgentsMetadata:
 
                 # Check if anything was actually modified or upserted
                 if result.modified_count + result.upserted_count == 0:
+                    await session.abort_transaction()
                     return "No functions were upserted, no changes found!"
                 return "success"
             except PyMongoError as e:
                 await session.abort_transaction()
-                logging.warn(f"FunctionsAndAgentsMetadata: set_functions exception {e}\n{traceback.format_exc()}")
-                return f"MongoDB error occurred while adding functions: {str(e)}"
+                logging.warning(f"FunctionsAndAgentsMetadata: upsert_functions exception {e}\n{traceback.format_exc()}")
+                return f"MongoDB error occurred while upserting functions: {str(e)}"
             except Exception as e:
                 await session.abort_transaction()
-                return f"FunctionsAndAgentsMetadata: set_functions exception {e}\n{traceback.format_exc()}"
+                return f"FunctionsAndAgentsMetadata: upsert_functions exception {e}\n{traceback.format_exc()}"
             finally:
                 session.end_session()
         return "No functions were provided."
 
-    async def upsert_agents(self, agents_upsert: List[UpsertAgentInput]):
+    async def upsert_agents(self, agents_upsert: List[UpsertAgentInput]) -> str:
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
 
+        operations = []
         session = await self.client.start_session()
-        session.start_transaction()
         try:
-            operations = []
+            session.start_transaction()
             for agent_upsert in agents_upsert:
-                # if adding functions then check if they exist first
                 if agent_upsert.functions_to_add:
                     if not await self.do_functions_exist(agent_upsert.auth.namespace_id, agent_upsert.functions_to_add, session):
                         return "One of the functions you are trying to add does not exist"
-                query = {
-                    "name": agent_upsert.name, 
-                    "namespace_id": agent_upsert.auth.namespace_id
-                }
+
+                # Generate the update dictionary using Pydantic's .dict() method
+                update_data = agent_upsert.dict(exclude_none=True, exclude={'functions_to_add', 'functions_to_remove'})
                 update = {
-                    "$set": {k: v for k, v in agent_upsert.dict(exclude_none=True).items() if k not in ['functions_to_add', 'functions_to_remove']},
+                    "$set": update_data,
                     "$addToSet": {
                         "function_names": {"$each": agent_upsert.functions_to_add} if agent_upsert.functions_to_add else None
                     },
@@ -358,16 +356,13 @@ class FunctionsAndAgentsMetadata:
                         "function_names": {"$in": agent_upsert.functions_to_remove} if agent_upsert.functions_to_remove else None
                     }
                 }
-                # Clean up the update dict to remove keys with `None` values
-                update["$addToSet"] = {k: v for k, v in update.get("$addToSet", {}).items() if v is not None}
-                update["$pull"] = {k: v for k, v in update.get("$pull", {}).items() if v is not None}
-                
-                # If after cleaning, the dictionaries are empty, remove them from the update
-                if not update["$addToSet"]:
-                    del update["$addToSet"]
-                if not update["$pull"]:
-                    del update["$pull"]
-                update_op = pymongo.UpdateOne(query, update, upsert=True)
+                # Clean up the update dict to remove keys with `None` values for `$addToSet` and `$pull`
+                update = {k: v for k, v in update.items() if v is not None and (v != {} or k not in ["$addToSet", "$pull"])}
+                update_op = pymongo.UpdateOne(
+                    {"name": agent_upsert.name, "namespace_id": agent_upsert.auth.namespace_id},
+                    update,
+                    upsert=True
+                )
                 operations.append(update_op)
 
             if operations:
@@ -378,33 +373,37 @@ class FunctionsAndAgentsMetadata:
                 )
                 # Check if anything was actually modified or upserted
                 if result.modified_count + result.upserted_count == 0:
+                    await session.abort_transaction()
                     return "No agents were upserted, no changes found!"
-            
-            await session.commit_transaction()
-            return "success"
+                await session.commit_transaction()
+                return "success"
+            else:
+                await session.abort_transaction()
+                return "No agents were provided."
         except PyMongoError as e:
-            logging.warn(f"FunctionsAndAgentsMetadata: upsert_agents exception {e}\n{traceback.format_exc()}")
+            await session.abort_transaction()
+            logging.warning(f"FunctionsAndAgentsMetadata: upsert_agents exception {e}\n{traceback.format_exc()}")
             return f"MongoDB error occurred while upserting agents: {str(e)}"
         except Exception as e:
             await session.abort_transaction()
-            logging.warn(f"FunctionsAndAgentsMetadata: upsert_agents exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"FunctionsAndAgentsMetadata: upsert_agents exception {e}\n{traceback.format_exc()}")
             return str(e)
         finally:
             session.end_session()
 
-    async def upsert_groups(self, groups_upsert: List[UpsertGroupInput]):
+    async def upsert_groups(self, groups_upsert: List[UpsertGroupInput]) -> str:
         if self.client is None or self.groups_collection is None or self.rate_limiter is None:
             await self.initialize()
 
+        operations = []
         session = await self.client.start_session()
-        session.start_transaction()
         try:
-            operations = []
+            session.start_transaction()
             for group_upsert in groups_upsert:
-                # if adding groups then check if they exist first
                 if group_upsert.agents_to_add:
                     if not await self.do_agents_exist(group_upsert.auth.namespace_id, group_upsert.agents_to_add, session):
                         return "One of the agents you are trying to add does not exist"
+
                 query = {
                     "name": group_upsert.name, 
                     "namespace_id": group_upsert.auth.namespace_id
@@ -418,15 +417,8 @@ class FunctionsAndAgentsMetadata:
                         "agent_names": {"$in": group_upsert.agents_to_remove} if group_upsert.agents_to_remove else None
                     }
                 }
-                # Clean up the update dict to remove keys with `None` values
-                update["$addToSet"] = {k: v for k, v in update.get("$addToSet", {}).items() if v is not None}
-                update["$pull"] = {k: v for k, v in update.get("$pull", {}).items() if v is not None}
-                
-                # If after cleaning, the dictionaries are empty, remove them from the update
-                if not update["$addToSet"]:
-                    del update["$addToSet"]
-                if not update["$pull"]:
-                    del update["$pull"]
+                # Clean up the update dict to remove keys with `None` values for `$addToSet` and `$pull`
+                update = {k: v for k, v in update.items() if v is not None and (v != {} or k not in ["$addToSet", "$pull"])}
                 update_op = pymongo.UpdateOne(query, update, upsert=True)
                 operations.append(update_op)
 
@@ -438,16 +430,20 @@ class FunctionsAndAgentsMetadata:
                 )
                 # Check if anything was actually modified or upserted
                 if result.modified_count + result.upserted_count == 0:
+                    await session.abort_transaction()
                     return "No groups were upserted, no changes found!"
-            
-            await session.commit_transaction()
-            return "success"
+                await session.commit_transaction()
+                return "success"
+            else:
+                await session.abort_transaction()
+                return "No groups were provided."
         except PyMongoError as e:
-            logging.warn(f"FunctionsAndAgentsMetadata: upsert_groups exception {e}\n{traceback.format_exc()}")
-            return f"MongoDB error occurred while upserting groups: {str(e)}"
+            await session.abort_transaction()
+            logging.warning(f"FunctionsAndAgentsMetadata: upsert_groups exception {e}\n{traceback.format_exc()}")
+            return f"MongoDB error occurred while upsert_groups agents: {str(e)}"
         except Exception as e:
             await session.abort_transaction()
-            logging.warn(f"FunctionsAndAgentsMetadata: upsert_groups exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"FunctionsAndAgentsMetadata: upsert_groups exception {e}\n{traceback.format_exc()}")
             return str(e)
         finally:
             session.end_session()
@@ -473,7 +469,7 @@ class FunctionsAndAgentsMetadata:
                 
                 return "success"
         except Exception as e:
-            logging.warn(f"FunctionsAndAgentsMetadata: delete_agents exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"FunctionsAndAgentsMetadata: delete_agents exception {e}\n{traceback.format_exc()}")
             return str(e)
         finally:
             session.end_session()
@@ -499,11 +495,11 @@ class FunctionsAndAgentsMetadata:
             return groups, None
         except PyMongoError as e:
             await session.abort_transaction()
-            logging.warn(f"FunctionsAndGroupsMetadata: get_groups exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"FunctionsAndGroupsMetadata: get_groups exception {e}\n{traceback.format_exc()}")
             return [], f"MongoDB error occurred while retrieving groups: {str(e)}"
         except Exception as e:
             await session.abort_transaction()
-            logging.warn(f"FunctionsAndGroupsMetadata: get_groups exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"FunctionsAndGroupsMetadata: get_groups exception {e}\n{traceback.format_exc()}")
             return [], f"Error occurred while retrieving groups: {str(e)}"
         finally:
             session.end_session()
@@ -530,8 +526,8 @@ class FunctionsAndAgentsMetadata:
 
             return agent_groups
         except PyMongoError as e:
-            logging.warn(f"FunctionsAndAgentsMetadata: get_agent_groups exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"FunctionsAndAgentsMetadata: get_agent_groups exception {e}\n{traceback.format_exc()}")
             return {}
         except Exception as e:
-            logging.warn(f"FunctionsAndAgentsMetadata: get_agent_groups exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"FunctionsAndAgentsMetadata: get_agent_groups exception {e}\n{traceback.format_exc()}")
             return {}
