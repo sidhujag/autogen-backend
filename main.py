@@ -1,6 +1,7 @@
 import os
 import logging
 import time
+import json
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -35,13 +36,13 @@ async def discoverFunctions(function_input: DiscoverFunctionsModel):
     """Endpoint to get functions based on provided input."""
     start = time.time()
     if function_input.auth.api_key == '':
-        return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
+        return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
     if function_input.auth.namespace_id == '':
-        return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
+        return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
     function_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning']
 
     if function_input.category != "" and function_input.category not in function_types:
-        return {'response': f'Invalid category {function_input.category}, must be one of {function_types}'}
+        return {'response': json.dumps({"error": f'Invalid category {function_input.category}, must be one of {function_types}'})}
 
     logging.info(f'Discovering function: {function_input}')
     result = await discover_functions_manager.pull_functions(function_input)
@@ -53,17 +54,17 @@ async def upsertFunctions(function_inputs: List[AddFunctionInput]):
     """Endpoint to upsert functions based on provided functions."""
     start = time.time()
     if len(function_inputs) == 0:
-        return {'response': "Error: No functions provided", 'elapsed_time': 0}
+        return {'response': json.dumps({"error": "No functions provided"}), 'elapsed_time': 0}
     functions = {}
     for function_input in function_inputs:
         if function_input.auth.api_key == '':
-            return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
         if function_input.auth.namespace_id == '':
-            return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
         function_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning']
 
         if function_input.category and function_input.category not in function_types:
-            return {'response': f'Invalid category for function {function_input.name}, must be one of {function_types}'}
+            return {'response': json.dumps({"error": f'Invalid category for function {function_input.name}, must be one of {function_types}'})}
 
         if function_input.description:
             # Append the new function to the category
@@ -91,14 +92,14 @@ async def getAgents(agent_inputs: List[GetAgentModel]):
     """Endpoint to get agent."""
     start = time.time()
     if len(agent_inputs) == 0:
-        return {'response': "Error: No agents provided", 'elapsed_time': 0}
+        return {'response': json.dumps({"error": "No agents provided"}), 'elapsed_time': 0}
     for agent in agent_inputs:
         if agent.auth.api_key == '':
-            return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
         if agent.auth.namespace_id == '':
-            return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
         if agent.name == '':
-            return {'response': "Error: agent name not provided!", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": json.dumps({"error": "agent name not provided!"})}), 'elapsed_time': 0}
     response, err = await functions_and_agents_metadata.get_agents(agent_inputs)
     if err is not None:
         for agent in agent_inputs:
@@ -113,30 +114,30 @@ async def getAgents(agent_inputs: List[GetAgentModel]):
 async def upsertAgents(agent_inputs: List[UpsertAgentInput]):
     """Endpoint to upsert agent."""
     if len(agent_inputs) == 0:
-        return {'response': "Error: No agents provided", 'elapsed_time': 0}
+        return {'response': "No agents provided", 'elapsed_time': 0}
     start = time.time()
     agents = {}
     for agent_input in agent_inputs:
         if agent_input.auth.api_key == '':
-            return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
         if agent_input.auth.namespace_id == '':
-            return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
         if agent_input.name == '':
-            return {'response': "Error: agent name not provided!", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "agent name not provided!"}), 'elapsed_time': 0}
         if agent_input.description and agent_input.description == '':
-            return {'response': "Error: agent description not provided!", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "agent description not provided!"}), 'elapsed_time': 0}
         if agent_input.category:
             agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'user']
             if agent_input.category not in agent_types:
-                return {'response': f'Invalid category for agent {agent_input.name}, must be one of {agent_types}', 'elapsed_time': 0}
+                return {'response': json.dumps({"error": f'Invalid category for agent {agent_input.name}, must be one of {agent_types}'}), 'elapsed_time': 0}
         if agent_input.human_input_mode:
             human_input_types = ['ALWAYS', 'NEVER', 'TERMINATE']
             if agent_input.human_input_mode not in human_input_types:
-                return {'response': f'Invalid human_input_mode for agent {agent_input.human_input_mode}, must be one of {human_input_types}', 'elapsed_time': 0}
+                return {'response': json.dumps({"error": f'Invalid human_input_mode for agent {agent_input.human_input_mode}, must be one of {human_input_types}'}), 'elapsed_time': 0}
         if agent_input.type:
             types = ['BASIC', 'FULL']
             if agent_input.type not in types:
-                return {'response': f'Invalid type for agent {agent_input.type}, must be one of {types}', 'elapsed_time': 0}
+                return {'response': json.dumps({"error": f'Invalid type for agent {agent_input.type}, must be one of {types}'}), 'elapsed_time': 0}
     # Push the agent
     response = await functions_and_agents_metadata.upsert_agents(agent_inputs)
     if response != "success":
@@ -166,9 +167,9 @@ async def updateComms(comms_input: UpdateComms):
     """Endpoint to update communication (incoming/outgoing) stats an agent."""
     start = time.time()
     if not comms_input.sender or not comms_input.receiver:
-        return {'response': "Error: sender and receiver not provided", 'elapsed_time': 0}
+        return {'response': json.dumps({"error": "sender and receiver not provided"}), 'elapsed_time': 0}
     if comms_input.auth.namespace_id == '':
-        return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
+        return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
     response = await functions_and_agents_metadata.update_comms(comms_input)
     if response != "success":
         end = time.time()
@@ -181,13 +182,13 @@ async def discoverAgents(agent_input: DiscoverAgentsModel):
     """Endpoint to discover agents."""
     start = time.time()
     if agent_input.auth.api_key == '':
-        return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
+        return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
     if agent_input.auth.namespace_id == '':
-        return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
+        return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
     agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'user']
 
     if agent_input.category != "" and agent_input.category not in agent_types:
-        return {'response': f'Invalid category {agent_input.category}, must be one of {agent_types}'}
+        return {'response': json.dumps({"error": f'Invalid category {agent_input.category}, must be one of {agent_types}'})}
 
     result = await discover_agents_manager.pull_agents(agent_input)
     
@@ -213,9 +214,9 @@ async def discoverGroups(group_input: DiscoverGroupsModel):
     """Endpoint to discover groups."""
     start = time.time()
     if group_input.auth.api_key == '':
-        return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
+        return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
     if group_input.auth.namespace_id == '':
-        return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
+        return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
 
     result = await discover_groups_manager.pull_groups(group_input)
     end = time.time()
@@ -226,14 +227,14 @@ async def getGroups(group_inputs: List[GetGroupModel]):
     """Endpoint to get group info."""
     start = time.time()
     if len(group_inputs) == 0:
-        return {'response': "Error: No groups provided", 'elapsed_time': 0}
+        return {'response': "No groups provided", 'elapsed_time': 0}
     for group_input in group_inputs:
         if group_input.auth.api_key == '':
-            return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
         if group_input.auth.namespace_id == '':
-            return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
         if group_input.name == '':
-            return {'response': "Error: group name not provided!", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "group name not provided!"}), 'elapsed_time': 0}
     response, err = await functions_and_agents_metadata.get_groups(group_inputs)
     if err is not None:
         for group in group_inputs:
@@ -248,18 +249,18 @@ async def getGroups(group_inputs: List[GetGroupModel]):
 async def upsertGroups(group_inputs: List[UpsertGroupInput]):
     """Endpoint to upsert group."""
     if len(group_inputs) == 0:
-        return {'response': "Error: No groups provided", 'elapsed_time': 0}
+        return {'response': "No groups provided", 'elapsed_time': 0}
     start = time.time()
     groups = []
     for group_input in group_inputs:
         if group_input.auth.api_key == '':
-            return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
         if group_input.auth.namespace_id == '':
-            return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
         if group_input.name == '':
-            return {'response': "Error: group name not provided!", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "group name not provided!"}), 'elapsed_time': 0}
         if group_input.description and group_input.description == '':
-            return {'response': "Error: group description not provided!", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "group description not provided!"}), 'elapsed_time': 0}
 
     # Push the group
     response = await functions_and_agents_metadata.upsert_groups(group_inputs)
@@ -287,12 +288,11 @@ async def deleteAgent(agent_inputs: List[DeleteAgentModel]):
     start = time.time()
     for agent_input in agent_inputs:
         if agent_input.auth.api_key == '':
-            return {'response': "Error: LLM API key not provided", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
         if agent_input.auth.namespace_id == '':
-            return {'response': "Error: namespace_id not provided", 'elapsed_time': 0}
+            return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
         if agent_input.name == '':
-            return {'response': "Error: agent name not provided!", 'elapsed_time': 0}
-        logging.info(f'Deleting agent: {agent_input.name}')
+            return {'response': json.dumps({"error": "agent name not provided!"}), 'elapsed_time': 0}
     # delete the agent
     response = await functions_and_agents_metadata.delete_agents(agent_inputs)
     if response != "success":

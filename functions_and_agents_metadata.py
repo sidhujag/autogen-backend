@@ -3,6 +3,7 @@ import logging
 import os
 import traceback
 import pymongo
+import json
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.server_api import ServerApi
@@ -199,7 +200,7 @@ class FunctionsAndAgentsMetadata:
 
     async def get_agents(self, agent_inputs: List[GetAgentModel], resolve_functions: bool = True) -> Tuple[List[AgentModel], str]:
         if not agent_inputs:
-            return [], "Agent input list is empty"
+            return [], json.dumps({"error": "Agent input list is empty"})
         
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
@@ -240,11 +241,11 @@ class FunctionsAndAgentsMetadata:
         except PyMongoError as e:
             await session.abort_transaction()
             logging.warning(f"FunctionsAndAgentsMetadata: get_agents exception {e}\n{traceback.format_exc()}")
-            return [], f"MongoDB error occurred while retrieving agents: {str(e)}"
+            return [], json.dumps({"error": f"MongoDB error occurred while retrieving agents: {str(e)}"})
         except Exception as e:
             await session.abort_transaction()
             logging.warning(f"FunctionsAndAgentsMetadata: get_agents exception {e}\n{traceback.format_exc()}")
-            return [], f"Error occurred while retrieving agents: {str(e)}"
+            return [], json.dumps({"error": f"Error occurred while retrieving agents: {str(e)}"})
         finally:
             session.end_session()
 
@@ -288,7 +289,7 @@ class FunctionsAndAgentsMetadata:
             except PyMongoError as e:
                 await session.abort_transaction()
                 logging.warning(f"update_comms exception {e}\n{traceback.format_exc()}")
-                return f"MongoDB error occurred: {str(e)}"
+                return json.dumps({"error": f"MongoDB error occurred: {str(e)}"})
             finally:
                 session.end_session()
 
@@ -321,18 +322,18 @@ class FunctionsAndAgentsMetadata:
                 # Check if anything was actually modified or upserted
                 if result.modified_count + result.upserted_count == 0:
                     await session.abort_transaction()
-                    return "No functions were upserted, no changes found!"
+                    return json.dumps({"error": "No functions were upserted, no changes found!"})
                 return "success"
             except PyMongoError as e:
                 await session.abort_transaction()
                 logging.warning(f"FunctionsAndAgentsMetadata: upsert_functions exception {e}\n{traceback.format_exc()}")
-                return f"MongoDB error occurred while upserting functions: {str(e)}"
+                return json.dumps({"error": f"MongoDB error occurred while upserting functions: {str(e)}"})
             except Exception as e:
                 await session.abort_transaction()
-                return f"FunctionsAndAgentsMetadata: upsert_functions exception {e}\n{traceback.format_exc()}"
+                return json.dumps({"error": str(e)})
             finally:
                 session.end_session()
-        return "No functions were provided."
+        return json.dumps({"error": "No functions were provided."})
 
     async def upsert_agents(self, agents_upsert: List[UpsertAgentInput]) -> str:
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
@@ -352,10 +353,10 @@ class FunctionsAndAgentsMetadata:
                 # If it's a new agent and no category is provided, fail the operation
                 if not existing_agent and agent_upsert.category is None:
                     await session.abort_transaction()
-                    return "New agents must have a category defined."
+                    return json.dumps({"error": "New agents must have a category defined."})
                 if agent_upsert.functions_to_add:
                     if not await self.do_functions_exist(agent_upsert.auth.namespace_id, agent_upsert.functions_to_add, session):
-                        return "One of the functions you are trying to add does not exist"
+                        return json.dumps({"error": "One of the functions you are trying to add does not exist"})
 
                 # Generate the update dictionary using Pydantic's .dict() method
                 update_data = agent_upsert.dict(exclude_none=True, exclude={'functions_to_add', 'functions_to_remove'})
@@ -393,7 +394,7 @@ class FunctionsAndAgentsMetadata:
                 # Check if anything was actually modified or upserted
                 if result.modified_count + result.upserted_count == 0:
                     await session.abort_transaction()
-                    return "No agents were upserted, no changes found!"
+                    return json.dumps({"error": "No agents were upserted, no changes found!"})
                 await session.commit_transaction()
                 return "success"
             else:
@@ -402,11 +403,11 @@ class FunctionsAndAgentsMetadata:
         except PyMongoError as e:
             await session.abort_transaction()
             logging.warning(f"FunctionsAndAgentsMetadata: upsert_agents exception {e}\n{traceback.format_exc()}")
-            return f"MongoDB error occurred while upserting agents: {str(e)}"
+            return json.dumps({"error": f"MongoDB error occurred while upserting agents: {str(e)}"})
         except Exception as e:
             await session.abort_transaction()
             logging.warning(f"FunctionsAndAgentsMetadata: upsert_agents exception {e}\n{traceback.format_exc()}")
-            return str(e)
+            return json.dumps({"error": str(e)})
         finally:
             session.end_session()
 
@@ -421,7 +422,7 @@ class FunctionsAndAgentsMetadata:
             for group_upsert in groups_upsert:
                 if group_upsert.agents_to_add:
                     if not await self.do_agents_exist(group_upsert.auth.namespace_id, group_upsert.agents_to_add, session):
-                        return "One of the agents you are trying to add does not exist"
+                        return json.dumps({"error": "One of the agents you are trying to add does not exist"})
 
                 query = {
                     "name": group_upsert.name, 
@@ -457,26 +458,26 @@ class FunctionsAndAgentsMetadata:
                 # Check if anything was actually modified or upserted
                 if result.modified_count + result.upserted_count == 0:
                     await session.abort_transaction()
-                    return "No groups were upserted, no changes found!"
+                    return json.dumps({"error": "No groups were upserted, no changes found!"})
                 await session.commit_transaction()
                 return "success"
             else:
                 await session.abort_transaction()
-                return "No groups were provided."
+                return json.dumps({"error": "No groups were provided."})
         except PyMongoError as e:
             await session.abort_transaction()
             logging.warning(f"FunctionsAndAgentsMetadata: upsert_groups exception {e}\n{traceback.format_exc()}")
-            return f"MongoDB error occurred while upsert_groups agents: {str(e)}"
+            return json.dumps({"error": f"MongoDB error occurred while upsert_groups agents: {str(e)}"})
         except Exception as e:
             await session.abort_transaction()
             logging.warning(f"FunctionsAndAgentsMetadata: upsert_groups exception {e}\n{traceback.format_exc()}")
-            return str(e)
+            return json.dumps({"error": str(e)})
         finally:
             session.end_session()
 
     async def delete_agents(self, agents_delete: List[DeleteAgentModel]):
         if not agents_delete:
-            return "Agent delete list is empty"
+            return json.dumps({"error": "Agent delete list is empty"})
         
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
@@ -489,20 +490,20 @@ class FunctionsAndAgentsMetadata:
                 delete_result = await self.agents_collection.delete_many({"$or": queries}, session=session)
                 
                 if delete_result.deleted_count == 0:
-                    return "No agents found or user not authorized to delete."
+                    return json.dumps({"error": "No agents found or user not authorized to delete."})
                 elif delete_result.deleted_count < len(agents_delete):
-                    return "Some agents were not found or user not authorized to delete."
+                    return json.dumps({"error": "Some agents were not found or user not authorized to delete."})
                 
                 return "success"
         except Exception as e:
             logging.warning(f"FunctionsAndAgentsMetadata: delete_agents exception {e}\n{traceback.format_exc()}")
-            return str(e)
+            return json.dumps({"error": str(e)})
         finally:
             session.end_session()
 
     async def get_groups(self, group_inputs: List[GetGroupModel]) -> Tuple[List[BaseGroup], str]:
         if not group_inputs:
-            return [], "Group input list is empty"
+            return [], json.dumps({"error": "Group input list is empty"})
         
         if self.client is None or self.groups_collection is None or self.rate_limiter is None:
             await self.initialize()
@@ -522,11 +523,11 @@ class FunctionsAndAgentsMetadata:
         except PyMongoError as e:
             await session.abort_transaction()
             logging.warning(f"FunctionsAndGroupsMetadata: get_groups exception {e}\n{traceback.format_exc()}")
-            return [], f"MongoDB error occurred while retrieving groups: {str(e)}"
+            return [], json.dumps({"error": f"MongoDB error occurred while retrieving groups: {str(e)}"})
         except Exception as e:
             await session.abort_transaction()
             logging.warning(f"FunctionsAndGroupsMetadata: get_groups exception {e}\n{traceback.format_exc()}")
-            return [], f"Error occurred while retrieving groups: {str(e)}"
+            return [], json.dumps({"error": str(e)})
         finally:
             session.end_session()
  
