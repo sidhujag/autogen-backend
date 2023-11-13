@@ -34,6 +34,7 @@ class GetGroupModel(BaseModel):
 class UpsertAgentInput(BaseModel):
     name: str
     auth: AuthAgent
+    assistant_id: str
     human_input_mode: Optional[str] = None
     default_auto_reply: Optional[str] = None
     description: Optional[str] = None
@@ -232,14 +233,14 @@ class FunctionsAndAgentsMetadata:
             results = []
             for agent_input in agent_inputs:
                 key = (agent_input.name, agent_input.auth.namespace_id)
-                agent_model = agents_dict.get(key, AgentModel(auth=agent_input.auth))
-                
-                if resolve_functions and agent_model.function_names:
-                    agent = Agent(**agent_model.dict())
-                    agent.functions = [functions_dict[name] for name in agent_model.function_names if name in functions_dict]
-                    results.append(agent)
-                else:
-                    results.append(agent_model)
+                agent_model = agents_dict.get(key)
+                if agent_model:  # Check if the agent_model exists
+                    if resolve_functions and agent_model.function_names:
+                        agent = Agent(**agent_model.dict())
+                        agent.functions = [functions_dict[name] for name in agent_model.function_names if name in functions_dict]
+                        results.append(agent)
+                    else:
+                        results.append(agent_model)
             await session.commit_transaction()
             return results, None
         except PyMongoError as e:
@@ -361,7 +362,6 @@ class FunctionsAndAgentsMetadata:
                 if agent_upsert.functions_to_add:
                     if not await self.do_functions_exist(agent_upsert.auth.namespace_id, agent_upsert.functions_to_add, session):
                         return json.dumps({"error": "One of the functions you are trying to add does not exist"})
-
                 # Generate the update dictionary using Pydantic's .dict() method
                 update_data = agent_upsert.dict(exclude_none=True, exclude={'functions_to_add', 'functions_to_remove', 'files_to_add', 'files_to_remove'})
                 # Create the update operation for the agent
