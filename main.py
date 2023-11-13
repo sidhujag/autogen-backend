@@ -139,7 +139,7 @@ async def upsertAgents(agent_inputs: List[UpsertAgentInput]):
             if agent_input.human_input_mode not in human_input_types:
                 return {'response': json.dumps({"error": f'Invalid human_input_mode for agent {agent_input.human_input_mode}, must be one of {human_input_types}'}), 'elapsed_time': 0}
         if agent_input.capability:
-            if agent_input.capability < GROUP_INFO or agent_input.capability > MANAGEMENT:
+            if agent_input.capability < GROUP_INFO or agent_input.capability > (MANAGEMENT*2 - 1):
                 return {'response': json.dumps({"error": f'Invalid capability for agent {agent_input.capability}'}), 'elapsed_time': 0}
             if not agent_input.capability & GROUP_INFO:
                 return {'response': json.dumps({"error": f'Invalid capability for agent {agent_input.capability}. GROUP_INFO not set.'}), 'elapsed_time': 0}
