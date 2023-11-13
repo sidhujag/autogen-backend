@@ -31,10 +31,6 @@ class GetGroupModel(BaseModel):
     name: str
     auth: AuthAgent
 
-class File(BaseModel):
-    file_id: str = Field(default="")
-    description: str = Field(default="")
-
 class UpsertAgentInput(BaseModel):
     name: str
     auth: AuthAgent
@@ -46,8 +42,8 @@ class UpsertAgentInput(BaseModel):
     functions_to_remove: Optional[List[str]] = None
     category: Optional[str] = None
     capability: Optional[int] = None
-    files_to_add: Optional[List[File]] = None
-    files_to_remove: Optional[List[File]] = None
+    files_to_add: Optional[Dict[str, str]] = None
+    files_to_remove: Optional[List[str]] = None
 
 class UpsertGroupInput(BaseModel):
     name: str
@@ -70,7 +66,7 @@ class BaseAgent(BaseModel):
     system_message: str = Field(default="")
     category: str = Field(default="")
     capability: int = Field(default=1)
-    files: Dict[str, File] = Field(default_factory=dict)
+    files: Dict[str, str] = Field(default_factory=dict)
 
 class BaseGroup(BaseModel):
     name: str = Field(default="")
@@ -367,33 +363,29 @@ class FunctionsAndAgentsMetadata:
                         return json.dumps({"error": "One of the functions you are trying to add does not exist"})
 
                 # Generate the update dictionary using Pydantic's .dict() method
-                update_data = agent_upsert.dict(exclude_none=True, exclude={'functions_to_add', 'functions_to_remove'})
+                update_data = agent_upsert.dict(exclude_none=True, exclude={'functions_to_add', 'functions_to_remove', 'files_to_add', 'files_to_remove'})
                 # Create the update operation for the agent
                 update = {"$set": update_data}
 
                 # Initialize the $addToSet and $pull operations if they have not been initialized yet
-                if agent_upsert.functions_to_add or agent_upsert.files_to_add:
-                    update["$addToSet"] = {}
-
-                if agent_upsert.functions_to_remove or agent_upsert.files_to_remove:
-                    update["$pull"] = {}
-
-                # Add functions if provided
                 if agent_upsert.functions_to_add:
-                    update["$addToSet"]["function_names"] = {"$each": agent_upsert.functions_to_add}
+                    update["$addToSet"] = {"function_names": {"$each": agent_upsert.functions_to_add}}
 
-                # Remove functions if provided
                 if agent_upsert.functions_to_remove:
-                    update["$pull"]["function_names"] = {"$in": agent_upsert.functions_to_remove}
+                    update["$pull"] = {"function_names": {"$in": agent_upsert.functions_to_remove}}
 
                 # Add files if provided
                 if agent_upsert.files_to_add:
-                    update["$addToSet"]["files"] = {"$each": [file.dict() for file in agent_upsert.files_to_add]}
+                    # Here we are assuming the update operation can handle a dictionary directly
+                    # If not, you would need to adjust the logic to work with your specific MongoDB schema
+                    for file_id, file_description in agent_upsert.files_to_add.items():
+                        update["$set"][f"files.{file_id}"] = file_description
 
                 # Remove files if provided
                 if agent_upsert.files_to_remove:
-                    update["$pull"]["files"] = {"$in": [file.file_id for file in agent_upsert.files_to_remove]}
-
+                    # For removal, we use $unset since we are working with dictionary keys
+                    update["$unset"] = {f"files.{file_id}": "" for file_id in agent_upsert.files_to_remove}
+                    
                 update_op = pymongo.UpdateOne(
                     {"name": agent_upsert.name, "namespace_id": agent_upsert.auth.namespace_id},
                     update,
