@@ -17,7 +17,11 @@ rate_limiter_sync = SyncRateLimiter(rate=10, period=1)
 load_dotenv()
 
 app = FastAPI()
-
+GROUP_INFO = 1
+CODE_INTERPRETER_TOOL = 2
+RETRIEVAL_TOOL = 4
+FILES = 8
+MANAGEMENT = 16
 # Initialize logging
 LOGFILE_PATH = os.path.join(os.path.dirname(
     os.path.abspath(__file__)), 'app.log')
@@ -134,10 +138,11 @@ async def upsertAgents(agent_inputs: List[UpsertAgentInput]):
             human_input_types = ['ALWAYS', 'NEVER', 'TERMINATE']
             if agent_input.human_input_mode not in human_input_types:
                 return {'response': json.dumps({"error": f'Invalid human_input_mode for agent {agent_input.human_input_mode}, must be one of {human_input_types}'}), 'elapsed_time': 0}
-        if agent_input.type:
-            types = ['BASIC', 'FULL']
-            if agent_input.type not in types:
-                return {'response': json.dumps({"error": f'Invalid type for agent {agent_input.type}, must be one of {types}'}), 'elapsed_time': 0}
+        if agent_input.capability:
+            if agent_input.capability < GROUP_INFO or agent_input.capability > MANAGEMENT:
+                return {'response': json.dumps({"error": f'Invalid capability for agent {agent_input.capability}'}), 'elapsed_time': 0}
+            if not agent_input.capability & GROUP_INFO:
+                return {'response': json.dumps({"error": f'Invalid capability for agent {agent_input.capability}. GROUP_INFO not set.'}), 'elapsed_time': 0}
     # Push the agent
     response = await functions_and_agents_metadata.upsert_agents(agent_inputs)
     if response != "success":

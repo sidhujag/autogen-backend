@@ -31,6 +31,10 @@ class GetGroupModel(BaseModel):
     name: str
     auth: AuthAgent
 
+class File(BaseModel):
+    file_id: str = Field(default="")
+    description: str = Field(default="")
+
 class UpsertAgentInput(BaseModel):
     name: str
     auth: AuthAgent
@@ -41,7 +45,9 @@ class UpsertAgentInput(BaseModel):
     functions_to_add: Optional[List[str]] = None
     functions_to_remove: Optional[List[str]] = None
     category: Optional[str] = None
-    type: Optional[str] = None
+    capability: Optional[int] = None
+    files_to_add: Optional[List[File]] = None
+    files_to_remove: Optional[List[File]] = None
 
 class UpsertGroupInput(BaseModel):
     name: str
@@ -57,12 +63,14 @@ class AgentStats(BaseModel):
 class BaseAgent(BaseModel):
     name: str = Field(default="")
     auth: AuthAgent
+    assistant_id: str = Field(default="")
     human_input_mode: str = Field(default="")
     default_auto_reply: str = Field(default="")
     description: str = Field(default="")
     system_message: str = Field(default="")
     category: str = Field(default="")
-    type: str = Field(default="BASIC")
+    capability: int = Field(default=1)
+    files: Dict[str, File] = Field(default_factory=dict)
 
 class BaseGroup(BaseModel):
     name: str = Field(default="")
@@ -360,24 +368,32 @@ class FunctionsAndAgentsMetadata:
 
                 # Generate the update dictionary using Pydantic's .dict() method
                 update_data = agent_upsert.dict(exclude_none=True, exclude={'functions_to_add', 'functions_to_remove'})
-                update = {
-                    "$set": update_data,
-                    "$addToSet": {
-                        "function_names": {"$each": agent_upsert.functions_to_add} if agent_upsert.functions_to_add else None
-                    },
-                    "$pull": {
-                        "function_names": {"$in": agent_upsert.functions_to_remove} if agent_upsert.functions_to_remove else None
-                    }
-                }
-                # Clean up the update dict to remove keys with `None` values
-                update["$addToSet"] = {k: v for k, v in update.get("$addToSet", {}).items() if v is not None}
-                update["$pull"] = {k: v for k, v in update.get("$pull", {}).items() if v is not None}
-                
-                # If after cleaning, the dictionaries are empty, remove them from the update
-                if not update["$addToSet"]:
-                    del update["$addToSet"]
-                if not update["$pull"]:
-                    del update["$pull"]
+                # Create the update operation for the agent
+                update = {"$set": update_data}
+
+                # Initialize the $addToSet and $pull operations if they have not been initialized yet
+                if agent_upsert.functions_to_add or agent_upsert.files_to_add:
+                    update["$addToSet"] = {}
+
+                if agent_upsert.functions_to_remove or agent_upsert.files_to_remove:
+                    update["$pull"] = {}
+
+                # Add functions if provided
+                if agent_upsert.functions_to_add:
+                    update["$addToSet"]["function_names"] = {"$each": agent_upsert.functions_to_add}
+
+                # Remove functions if provided
+                if agent_upsert.functions_to_remove:
+                    update["$pull"]["function_names"] = {"$in": agent_upsert.functions_to_remove}
+
+                # Add files if provided
+                if agent_upsert.files_to_add:
+                    update["$addToSet"]["files"] = {"$each": [file.dict() for file in agent_upsert.files_to_add]}
+
+                # Remove files if provided
+                if agent_upsert.files_to_remove:
+                    update["$pull"]["files"] = {"$in": [file.file_id for file in agent_upsert.files_to_remove]}
+
                 update_op = pymongo.UpdateOne(
                     {"name": agent_upsert.name, "namespace_id": agent_upsert.auth.namespace_id},
                     update,
