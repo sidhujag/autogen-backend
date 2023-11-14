@@ -34,7 +34,7 @@ class GetGroupModel(BaseModel):
 class UpsertAgentInput(BaseModel):
     name: str
     auth: AuthAgent
-    assistant_id: str
+    assistant_id: Optional[str] = None
     human_input_mode: Optional[str] = None
     default_auto_reply: Optional[str] = None
     description: Optional[str] = None
