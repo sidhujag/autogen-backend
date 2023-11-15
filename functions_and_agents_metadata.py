@@ -85,6 +85,7 @@ class OpenAIParameter(BaseModel):
 class AddFunctionModel(BaseModel):
     name: str
     namespace_id: str = Field(default="")
+    status: str
     description: str
     parameters: OpenAIParameter = Field(default_factory=OpenAIParameter)
     category: str
@@ -100,16 +101,17 @@ class AgentModel(BaseAgent):
 class AddFunctionInput(BaseModel):
     name: str
     auth: AuthAgent
-    description: str
+    status: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    class_name: str = None
     parameters: OpenAIParameter = OpenAIParameter(type="object", properties={})
-    category: str
     function_code: Optional[str] = None
-    class_name: Optional[str] = None
     def to_add_function_model_dict(self):
         data = self.dict(exclude={"auth"}, exclude_none=True)
         data.update(self.auth.to_dict())
         return data
-
+    
 class UpdateComms(BaseModel):
     auth: AuthAgent
     sender: str
@@ -302,21 +304,41 @@ class FunctionsAndAgentsMetadata:
         if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
             await self.initialize()
 
+        session = await self.client.start_session()
         operations = []
-        for function in functions:
-            function_model_data = function.to_add_function_model_dict()
-            function_model = AddFunctionModel(**function_model_data)
-            update_op = pymongo.UpdateOne(
-                {"name": function.name, "namespace_id": function.auth.namespace_id},
-                {"$set": function_model.dict()},
-                upsert=True
-            )
-            operations.append(update_op)
+        try:
+            session.start_transaction()
+            for function in functions:
+                # Check if the function exists
+                existing_function = await self.funcs_collection.find_one(
+                    {"name": function.name, "namespace_id": function.auth.namespace_id},
+                    session=session
+                )
+                if not existing_function and function.category is None:
+                    await session.abort_transaction()
+                    return json.dumps({"error": "New functions must have a category defined."})
+                if not existing_function and function.status is None:
+                    await session.abort_transaction()
+                    return json.dumps({"error": "New functions must have a status defined."})
+                if not existing_function and function.status == "accepted":
+                    await session.abort_transaction()
+                    return json.dumps({"error": "New untested functions cannot have an accepted status."})
+                if not existing_function and function.description is None:
+                    await session.abort_transaction()
+                    return json.dumps({"error": "New functions must have a description defined."})
+                if not existing_function and function.class_name is None and function.function_code is None:
+                    await session.abort_transaction()
+                    return json.dumps({"error": "New functions must have either function_code or class_name defined."})
+                function_model_data = function.to_add_function_model_dict()
+                function_model = AddFunctionModel(**function_model_data)
+                update_op = pymongo.UpdateOne(
+                    {"name": function.name, "namespace_id": function.auth.namespace_id},
+                    {"$set": function_model.dict()},
+                    upsert=True
+                )
+                operations.append(update_op)
 
-        if operations:
-            session = await self.client.start_session()
-            try:
-                session.start_transaction()
+            if operations:   
                 result = await self.rate_limiter.execute(
                     self.funcs_collection.bulk_write,
                     operations,
@@ -329,16 +351,15 @@ class FunctionsAndAgentsMetadata:
                     await session.abort_transaction()
                     return json.dumps({"error": "No functions were upserted, no changes found!"})
                 return "success"
-            except PyMongoError as e:
-                await session.abort_transaction()
-                logging.warning(f"FunctionsAndAgentsMetadata: upsert_functions exception {e}\n{traceback.format_exc()}")
-                return json.dumps({"error": f"MongoDB error occurred while upserting functions: {str(e)}"})
-            except Exception as e:
-                await session.abort_transaction()
-                return json.dumps({"error": str(e)})
-            finally:
-                session.end_session()
-        return json.dumps({"error": "No functions were provided."})
+        except PyMongoError as e:
+            await session.abort_transaction()
+            logging.warning(f"FunctionsAndAgentsMetadata: upsert_functions exception {e}\n{traceback.format_exc()}")
+            return json.dumps({"error": f"MongoDB error occurred while upserting functions: {str(e)}"})
+        except Exception as e:
+            await session.abort_transaction()
+            return json.dumps({"error": str(e)})
+        finally:
+            session.end_session()
 
     async def upsert_agents(self, agents_upsert: List[UpsertAgentInput]) -> str:
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:

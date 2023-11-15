@@ -66,9 +66,12 @@ async def upsertFunctions(function_inputs: List[AddFunctionInput]):
         if function_input.auth.namespace_id == '':
             return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
         function_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning']
-
         if function_input.category and function_input.category not in function_types:
             return {'response': json.dumps({"error": f'Invalid category for function {function_input.name}, must be one of {function_types}'})}
+
+        function_status = ['development', 'testing', 'accepted']
+        if function_input.status and function_input.status not in function_status:
+            return {'response': json.dumps({"error": f'Invalid status for function {function_input.name}, must be one of {function_status}'})}
 
         if function_input.description:
             # Append the new function to the category
