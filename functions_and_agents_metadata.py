@@ -332,7 +332,7 @@ class FunctionsAndAgentsMetadata:
                     await session.abort_transaction()
                     return json.dumps({"error": "New functions must have either function_code or class_name defined."})
                 if existing_function:
-                    existing_function_model = AddFunctionModel(existing_function)
+                    existing_function_model = AddFunctionModel(**existing_function)
                     # if status is changing to accepted make sure this updater is not the same as the last one
                     if function.status == "accepted" and existing_function_model.status != "accepted" and existing_function_model.last_updater == function.last_updater:
                         await session.abort_transaction()
