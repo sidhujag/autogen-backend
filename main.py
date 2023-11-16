@@ -61,6 +61,8 @@ async def upsertFunctions(function_inputs: List[AddFunctionInput]):
         return {'response': json.dumps({"error": "No functions provided"}), 'elapsed_time': 0}
     functions = {}
     for function_input in function_inputs:
+        if function_input.status == "accepted" and function_input.function_code:
+            return {'response': json.dumps({"error": "Status cannot be set to accept while function_code is also set."}), 'elapsed_time': 0}
         if function_input.auth.api_key == '':
             return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
         if function_input.auth.namespace_id == '':

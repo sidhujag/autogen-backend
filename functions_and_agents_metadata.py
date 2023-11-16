@@ -86,6 +86,7 @@ class AddFunctionModel(BaseModel):
     name: str
     namespace_id: str = Field(default="")
     status: str
+    last_updater: str
     description: str
     parameters: OpenAIParameter = Field(default_factory=OpenAIParameter)
     category: str
@@ -101,6 +102,7 @@ class AgentModel(BaseAgent):
 class AddFunctionInput(BaseModel):
     name: str
     auth: AuthAgent
+    last_updater: str
     status: Optional[str] = None
     description: Optional[str] = None
     category: Optional[str] = None
@@ -329,6 +331,17 @@ class FunctionsAndAgentsMetadata:
                 if not existing_function and function.class_name is None and function.function_code is None:
                     await session.abort_transaction()
                     return json.dumps({"error": "New functions must have either function_code or class_name defined."})
+                if existing_function:
+                    existing_function_model = AddFunctionModel(existing_function)
+                    # if status is changing to accepted make sure this updater is not the same as the last one
+                    if function.status == "accepted" and existing_function_model.status != "accepted" and existing_function_model.last_updater == function.last_updater:
+                        await session.abort_transaction()
+                        return json.dumps({"error": "A different agent must accept the function from the one that last updated the code."})
+                    # if function already accepted then you must change state back to testing or development if you are updating code
+                    elif existing_function_model.status == "accepted" and not function.status and function.function_code:
+                        await session.abort_transaction()
+                        return json.dumps({"error": "Currently accepted function must change status (to either development or testing) if you are updating code."})
+                    
                 function_model_data = function.to_add_function_model_dict()
                 function_model = AddFunctionModel(**function_model_data)
                 update_op = pymongo.UpdateOne(
