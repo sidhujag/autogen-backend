@@ -155,25 +155,25 @@ class FunctionsAndAgentsMetadata:
             except Exception as e:
                 logging.warning(f"FunctionsAndAgentsMetadata: initialize exception {e}\n{traceback.format_exc()}")
 
-    async def do_functions_exist(self, namespace_id: str, function_names: List[str], session) -> bool:
+    async def do_functions_exist(self, namespace_id: str, function_names: List[str]) -> bool:
         if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
             await self.initialize()
 
         try:
             query = {"name": {"$in": function_names}, "namespace_id": namespace_id}
-            count = await self.funcs_collection.count_documents(query, session=session)
+            count = await self.funcs_collection.count_documents(query)
             return count == len(function_names)
         except Exception as e:
             logging.warning(f"FunctionsAndAgentsMetadata: do_functions_exist exception {e}\n{traceback.format_exc()}")
             return False
 
-    async def do_agents_exist(self, namespace_id: str, agent_names: List[str], session) -> bool:
+    async def do_agents_exist(self, namespace_id: str, agent_names: List[str]) -> bool:
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
 
         try:
             query = {"name": {"$in": agent_names}, "namespace_id": namespace_id}
-            count = await self.agents_collection.count_documents(query, session=session)
+            count = await self.agents_collection.count_documents(query)
             return count == len(agent_names)
         except Exception as e:
             logging.warning(f"FunctionsAndAgentsMetadata: do_agents_exist exception {e}\n{traceback.format_exc()}")
@@ -183,27 +183,17 @@ class FunctionsAndAgentsMetadata:
         if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
             await self.initialize()
 
-        session = await self.client.start_session()
-        session.start_transaction(read_concern=pymongo.read_concern.ReadConcern("snapshot"))
-
-        transaction_committed = False
         try:
             unique_functions = {(function_input.name, function_input.auth.namespace_id) for function_input in function_inputs}
             names, namespace_ids = zip(*unique_functions)
             query = {"name": {"$in": names}, "namespace_id": {"$in": namespace_ids}}
-            doc_cursor = self.funcs_collection.find(query, session=session)
+            doc_cursor = self.funcs_collection.find(query)
             docs = await self.rate_limiter.execute(doc_cursor.to_list, length=None)
-            function_models = [BaseFunction(**doc) for doc in docs if isinstance(doc, dict)]
-            await session.commit_transaction()
-            transaction_committed = True    
+            function_models = [BaseFunction(**doc) for doc in docs if isinstance(doc, dict)] 
             return function_models
         except Exception as e:
-            if not transaction_committed:
-                    await session.abort_transaction()
             logging.warning(f"FunctionsAndAgentsMetadata: get_functions exception {e}\n{traceback.format_exc()}")
             return []
-        finally:
-            session.end_session()
 
     async def get_agents(self, agent_inputs: List[GetAgentModel], resolve_functions: bool = True) -> Tuple[List[BaseAgent], str]:
         if not agent_inputs:
@@ -212,118 +202,87 @@ class FunctionsAndAgentsMetadata:
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
 
-        session = await self.client.start_session()
-        session.start_transaction(read_concern=pymongo.read_concern.ReadConcern("snapshot"))
-        transaction_committed = False
         try:
             unique_agents = {(agent_input.name, agent_input.auth.namespace_id) for agent_input in agent_inputs}
             names, namespace_ids = zip(*unique_agents)
             query = {"name": {"$in": names}, "namespace_id": {"$in": namespace_ids}}
-            doc_cursor = self.agents_collection.find(query, session=session)
+            doc_cursor = self.agents_collection.find(query)
             agents_docs = await self.rate_limiter.execute(doc_cursor.to_list, length=None)
             agents = [BaseAgent(**doc) for doc in agents_docs]
-            await session.commit_transaction()
-            transaction_committed = True
             return agents, None
         except PyMongoError as e:
-            if not transaction_committed:
-                await session.abort_transaction()
             logging.warning(f"FunctionsAndAgentsMetadata: get_agents exception {e}\n{traceback.format_exc()}")
             return [], json.dumps({"error": f"MongoDB error occurred while retrieving agents: {str(e)}"})
         except Exception as e:
-            if not transaction_committed:
-                await session.abort_transaction()
             logging.warning(f"FunctionsAndAgentsMetadata: get_agents exception {e}\n{traceback.format_exc()}")
             return [], json.dumps({"error": f"Error occurred while retrieving agents: {str(e)}"})
-        finally:
-            session.end_session()
 
     async def update_comms(self, agent_input: UpdateComms):
         if self.client is None or self.groups_collection is None or self.rate_limiter is None:
             await self.initialize()
 
-        async with await self.client.start_session() as session:
-            session.start_transaction()
-            transaction_committed = False
-            try:
-                # Prepare the updates for outgoing and incoming message counts
-                sender_outgoing_count_field = f"outgoing.{agent_input.receiver}"
-                receiver_incoming_count_field = f"incoming.{agent_input.sender}"
+        try:
+            # Prepare the updates for outgoing and incoming message counts
+            sender_outgoing_count_field = f"outgoing.{agent_input.receiver}"
+            receiver_incoming_count_field = f"incoming.{agent_input.sender}"
 
-                # Update the outgoing count for the sender
-                sender_update = pymongo.UpdateOne(
-                    {"name": agent_input.sender, "namespace_id": agent_input.auth.namespace_id},
-                    {
-                        "$inc": {sender_outgoing_count_field: 1},
-                        "$setOnInsert": {"name": agent_input.sender, "namespace_id": agent_input.auth.namespace_id}
-                    },
-                    upsert=True
-                )
-                
-                # Update the incoming count for the receiver
-                receiver_update = pymongo.UpdateOne(
-                    {"name": agent_input.receiver, "namespace_id": agent_input.auth.namespace_id},
-                    {
-                        "$inc": {receiver_incoming_count_field: 1},
-                        "$setOnInsert": {"name": agent_input.receiver, "namespace_id": agent_input.auth.namespace_id}
-                    },
-                    upsert=True
-                )
+            # Update the outgoing count for the sender
+            sender_update = pymongo.UpdateOne(
+                {"name": agent_input.sender, "namespace_id": agent_input.auth.namespace_id},
+                {
+                    "$inc": {sender_outgoing_count_field: 1},
+                    "$setOnInsert": {"name": agent_input.sender, "namespace_id": agent_input.auth.namespace_id}
+                },
+                upsert=True
+            )
+            
+            # Update the incoming count for the receiver
+            receiver_update = pymongo.UpdateOne(
+                {"name": agent_input.receiver, "namespace_id": agent_input.auth.namespace_id},
+                {
+                    "$inc": {receiver_incoming_count_field: 1},
+                    "$setOnInsert": {"name": agent_input.receiver, "namespace_id": agent_input.auth.namespace_id}
+                },
+                upsert=True
+            )
 
-                operations = [sender_update, receiver_update]
-                if operations:
-                    await self.groups_collection.bulk_write(operations, session=session)
-                
-                await session.commit_transaction()
-                transaction_committed = True
-                return "success"
-            except PyMongoError as e:
-                if not transaction_committed:
-                    await session.abort_transaction()
-                logging.warning(f"update_comms exception {e}\n{traceback.format_exc()}")
-                return json.dumps({"error": f"MongoDB error occurred: {str(e)}"})
-            finally:
-                session.end_session()
+            operations = [sender_update, receiver_update]
+            if operations:
+                await self.groups_collection.bulk_write(operations)
+            return "success"
+        except PyMongoError as e:
+            logging.warning(f"update_comms exception {e}\n{traceback.format_exc()}")
+            return json.dumps({"error": f"MongoDB error occurred: {str(e)}"})
+
 
     async def upsert_functions(self, functions: List[AddFunctionInput]) -> str:
         if self.client is None or self.funcs_collection is None or self.rate_limiter is None:
             await self.initialize()
 
-        session = await self.client.start_session()
-        transaction_committed = False
         operations = []
         try:
-            session.start_transaction()
             for function in functions:
                 # Check if the function exists
                 existing_function = await self.funcs_collection.find_one(
-                    {"name": function.name, "namespace_id": function.auth.namespace_id},
-                    session=session
+                    {"name": function.name, "namespace_id": function.auth.namespace_id}
                 )
                 if not existing_function and function.category is None:
-                    await session.abort_transaction()
                     return json.dumps({"error": "New functions must have a category defined."})
                 if not existing_function and function.status is None:
-                    await session.abort_transaction()
                     return json.dumps({"error": "New functions must have a status defined."})
                 if not existing_function and function.status == "accepted" and function.function_code:
-                    await session.abort_transaction()
                     return json.dumps({"error": "New untested functions cannot have an accepted status."})
                 if not existing_function and function.description is None:
-                    await session.abort_transaction()
                     return json.dumps({"error": "New functions must have a description defined."})
                 if not existing_function and function.class_name is None and function.function_code is None:
-                    await session.abort_transaction()
                     return json.dumps({"error": "New functions must have either function_code or class_name defined."})
                 if existing_function and function.function_code:
                     existing_function_model = AddFunctionModel(**existing_function)
                     # if status is changing to accepted make sure this updater is not the same as the last one
                     if function.status == "accepted" and existing_function_model.status != "accepted" and existing_function_model.last_updater == function.last_updater:
-                        await session.abort_transaction()
                         return json.dumps({"error": "A different agent must accept the function from the one that last updated the code."})
                     # if function already accepted then you must change state back to testing or development if you are updating code
                     elif existing_function_model.status == "accepted" and not function.status and function.function_code:
-                        await session.abort_transaction()
                         return json.dumps({"error": "Currently accepted function must change status (to either development or testing) if you are updating code."})
                     
                 function_model_data = function.to_add_function_model_dict()
@@ -338,51 +297,36 @@ class FunctionsAndAgentsMetadata:
             if operations:   
                 result = await self.rate_limiter.execute(
                     self.funcs_collection.bulk_write,
-                    operations,
-                    session=session
+                    operations
                 )
 
                 # Check if anything was actually modified or upserted
                 if result.modified_count + result.upserted_count == 0:
-                    await session.abort_transaction()
                     return json.dumps({"error": "No functions were upserted, no changes found!"})
-                await session.commit_transaction()
-                transaction_committed = True
                 return "success"
         except PyMongoError as e:
-            if not transaction_committed:
-                await session.abort_transaction()
             logging.warning(f"FunctionsAndAgentsMetadata: upsert_functions exception {e}\n{traceback.format_exc()}")
             return json.dumps({"error": f"MongoDB error occurred while upserting functions: {str(e)}"})
         except Exception as e:
-            if not transaction_committed:
-                await session.abort_transaction()
             return json.dumps({"error": str(e)})
-        finally:
-            session.end_session()
 
     async def upsert_agents(self, agents_upsert: List[UpsertAgentModel]) -> str:
         if self.client is None or self.agents_collection is None or self.rate_limiter is None:
             await self.initialize()
 
         operations = []
-        session = await self.client.start_session()
         try:
-            session.start_transaction()
-            transaction_committed = False
             for agent_upsert in agents_upsert:
                 # Check if the agent exists
                 existing_agent = await self.agents_collection.find_one(
-                    {"name": agent_upsert.name, "namespace_id": agent_upsert.auth.namespace_id},
-                    session=session
+                    {"name": agent_upsert.name, "namespace_id": agent_upsert.auth.namespace_id}
                 )
 
                 # If it's a new agent and no category is provided, fail the operation
                 if not existing_agent and agent_upsert.category is None:
-                    await session.abort_transaction()
                     return json.dumps({"error": "New agents must have a category defined."})
                 if agent_upsert.functions_to_add:
-                    if not await self.do_functions_exist(agent_upsert.auth.namespace_id, agent_upsert.functions_to_add, session):
+                    if not await self.do_functions_exist(agent_upsert.auth.namespace_id, agent_upsert.functions_to_add):
                         return json.dumps({"error": "One of the functions you are trying to add does not exist"})
                 # Generate the update dictionary using Pydantic's .dict() method
                 update_data = agent_upsert.dict(exclude_none=True, exclude={'functions_to_add', 'functions_to_remove', 'files_to_add', 'files_to_remove'})
@@ -418,44 +362,30 @@ class FunctionsAndAgentsMetadata:
             if operations:
                 result = await self.rate_limiter.execute(
                     self.agents_collection.bulk_write,
-                    operations,
-                    session=session
+                    operations
                 )
                 # Check if anything was actually modified or upserted
                 if result.modified_count + result.upserted_count == 0:
-                    await session.abort_transaction()
                     return json.dumps({"error": "No agents were upserted, no changes found!"})
-                await session.commit_transaction()
-                transaction_committed = True
                 return "success"
             else:
-                await session.abort_transaction()
                 return "No agents were provided."
         except PyMongoError as e:
-            if not transaction_committed:
-                await session.abort_transaction()
             logging.warning(f"FunctionsAndAgentsMetadata: upsert_agents exception {e}\n{traceback.format_exc()}")
             return json.dumps({"error": f"MongoDB error occurred while upserting agents: {str(e)}"})
         except Exception as e:
-            if not transaction_committed:
-                await session.abort_transaction()
             logging.warning(f"FunctionsAndAgentsMetadata: upsert_agents exception {e}\n{traceback.format_exc()}")
             return json.dumps({"error": str(e)})
-        finally:
-            session.end_session()
 
     async def upsert_groups(self, groups_upsert: List[UpsertGroupInput]) -> str:
         if self.client is None or self.groups_collection is None or self.rate_limiter is None:
             await self.initialize()
 
         operations = []
-        session = await self.client.start_session()
-        transaction_committed = False
         try:
-            session.start_transaction()
             for group_upsert in groups_upsert:
                 if group_upsert.agents_to_add:
-                    if not await self.do_agents_exist(group_upsert.auth.namespace_id, group_upsert.agents_to_add, session):
+                    if not await self.do_agents_exist(group_upsert.auth.namespace_id, group_upsert.agents_to_add):
                         return json.dumps({"error": "One of the agents you are trying to add does not exist"})
 
                 query = {
@@ -486,31 +416,20 @@ class FunctionsAndAgentsMetadata:
             if operations:
                 result = await self.rate_limiter.execute(
                     self.groups_collection.bulk_write,
-                    operations,
-                    session=session
+                    operations
                 )
                 # Check if anything was actually modified or upserted
                 if result.modified_count + result.upserted_count == 0:
-                    await session.abort_transaction()
                     return json.dumps({"error": "No groups were upserted, no changes found!"})
-                await session.commit_transaction()
-                transaction_committed = True
                 return "success"
             else:
-                await session.abort_transaction()
                 return json.dumps({"error": "No groups were provided."})
         except PyMongoError as e:
-            if not transaction_committed:
-                await session.abort_transaction()
             logging.warning(f"FunctionsAndAgentsMetadata: upsert_groups exception {e}\n{traceback.format_exc()}")
             return json.dumps({"error": f"MongoDB error occurred while upsert_groups agents: {str(e)}"})
         except Exception as e:
-            if not transaction_committed:
-                await session.abort_transaction()
             logging.warning(f"FunctionsAndAgentsMetadata: upsert_groups exception {e}\n{traceback.format_exc()}")
             return json.dumps({"error": str(e)})
-        finally:
-            session.end_session()
 
     async def delete_agents(self, agents_delete: List[DeleteAgentModel]):
         if not agents_delete:
@@ -520,23 +439,19 @@ class FunctionsAndAgentsMetadata:
             await self.initialize()
 
         queries = [{"name": agent_delete.name, "namespace_id": agent_delete.auth.namespace_id} for agent_delete in agents_delete]
-        session = await self.client.start_session()
         try:
-            async with session.start_transaction():
-                # Perform the delete operations in batch
-                delete_result = await self.agents_collection.delete_many({"$or": queries}, session=session)
-                
-                if delete_result.deleted_count == 0:
-                    return json.dumps({"error": "No agents found or user not authorized to delete."})
-                elif delete_result.deleted_count < len(agents_delete):
-                    return json.dumps({"error": "Some agents were not found or user not authorized to delete."})
-                
-                return "success"
+            # Perform the delete operations in batch
+            delete_result = await self.agents_collection.delete_many({"$or": queries})
+            
+            if delete_result.deleted_count == 0:
+                return json.dumps({"error": "No agents found or user not authorized to delete."})
+            elif delete_result.deleted_count < len(agents_delete):
+                return json.dumps({"error": "Some agents were not found or user not authorized to delete."})
+            
+            return "success"
         except Exception as e:
             logging.warning(f"FunctionsAndAgentsMetadata: delete_agents exception {e}\n{traceback.format_exc()}")
             return json.dumps({"error": str(e)})
-        finally:
-            session.end_session()
 
     async def get_groups(self, group_inputs: List[GetGroupModel]) -> Tuple[List[BaseGroup], str]:
         if not group_inputs:
@@ -545,31 +460,20 @@ class FunctionsAndAgentsMetadata:
         if self.client is None or self.groups_collection is None or self.rate_limiter is None:
             await self.initialize()
 
-        session = await self.client.start_session()
-        session.start_transaction(read_concern=pymongo.read_concern.ReadConcern("snapshot"))
-        transaction_committed = False
         try:
             unique_groups = {(group_input.name, group_input.auth.namespace_id) for group_input in group_inputs}
             names, namespace_ids = zip(*unique_groups)
             query = {"name": {"$in": names}, "namespace_id": {"$in": namespace_ids}}
-            doc_cursor = self.groups_collection.find(query, session=session)
+            doc_cursor = self.groups_collection.find(query)
             groups_docs = await self.rate_limiter.execute(doc_cursor.to_list, length=None)
             groups = [BaseGroup(**doc) for doc in groups_docs]
-            await session.commit_transaction()
-            transaction_committed = True
             return groups, None
         except PyMongoError as e:
-            if not transaction_committed:
-                await session.abort_transaction()
             logging.warning(f"FunctionsAndGroupsMetadata: get_groups exception {e}\n{traceback.format_exc()}")
             return [], json.dumps({"error": f"MongoDB error occurred while retrieving groups: {str(e)}"})
         except Exception as e:
-            if not transaction_committed:
-                await session.abort_transaction()
             logging.warning(f"FunctionsAndGroupsMetadata: get_groups exception {e}\n{traceback.format_exc()}")
             return [], json.dumps({"error": str(e)})
-        finally:
-            session.end_session()
 
     async def get_agent_groups(self, agent_names: List[str], namespace_id: str) -> Dict[str, List[str]]:
         if self.client is None or self.groups_collection is None or self.rate_limiter is None:
