@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from discover_functions_manager import DiscoverFunctionsManager, DiscoverFunctionsModel
 from discover_agents_manager import DiscoverAgentsManager, DiscoverAgentsModel
 from discover_groups_manager import DiscoverGroupsManager, DiscoverGroupsModel
-from functions_and_agents_metadata import FunctionsAndAgentsMetadata, GetGroupModel, UpsertGroupInput, UpdateComms, AddFunctionInput, GetAgentModel, DeleteAgentModel, UpsertAgentInput
+from functions_and_agents_metadata import GetFunctionModel, FunctionsAndAgentsMetadata, GetGroupModel, UpsertGroupInput, UpdateComms, AddFunctionInput, GetAgentModel, DeleteAgentModel, UpsertAgentModel
 from rate_limiter import RateLimiter, SyncRateLimiter
 from typing import List
 rate_limiter = RateLimiter(rate=10, period=1)  # Allow 5 tasks per second
@@ -17,9 +17,9 @@ rate_limiter_sync = SyncRateLimiter(rate=10, period=1)
 load_dotenv()
 
 app = FastAPI()
-GROUP_INFO = 1
-CODE_INTERPRETER_TOOL = 2
-RETRIEVAL_TOOL = 4
+INFO = 1
+CODE_INTERPRETER = 2
+RETRIEVAL = 4
 FILES = 8
 MANAGEMENT = 16
 # Initialize logging
@@ -79,7 +79,8 @@ async def upsertFunctions(function_inputs: List[AddFunctionInput]):
             # Append the new function to the category
             new_function = {
                 'name': function_input.name,
-                'description': function_input.description
+                'description': function_input.description,
+                'status': function_input.status
             }
             if function_input.category in functions:
                 functions[function_input.category].append(new_function)
@@ -120,7 +121,7 @@ async def getAgents(agent_inputs: List[GetAgentModel]):
     return {'response': response, 'elapsed_time': end-start}
 
 @app.post('/upsert_agents/')
-async def upsertAgents(agent_inputs: List[UpsertAgentInput]):
+async def upsertAgents(agent_inputs: List[UpsertAgentModel]):
     """Endpoint to upsert agent."""
     if len(agent_inputs) == 0:
         return {'response': "No agents provided", 'elapsed_time': 0}
@@ -144,10 +145,10 @@ async def upsertAgents(agent_inputs: List[UpsertAgentInput]):
             if agent_input.human_input_mode not in human_input_types:
                 return {'response': json.dumps({"error": f'Invalid human_input_mode for agent {agent_input.human_input_mode}, must be one of {human_input_types}'}), 'elapsed_time': 0}
         if agent_input.capability:
-            if agent_input.capability < GROUP_INFO or agent_input.capability > (MANAGEMENT*2 - 1):
+            if agent_input.capability < INFO or agent_input.capability > (MANAGEMENT*2 - 1):
                 return {'response': json.dumps({"error": f'Invalid capability for agent {agent_input.capability}'}), 'elapsed_time': 0}
-            if not agent_input.capability & GROUP_INFO:
-                return {'response': json.dumps({"error": f'Invalid capability for agent {agent_input.capability}. GROUP_INFO not set.'}), 'elapsed_time': 0}
+            if not agent_input.capability & INFO:
+                return {'response': json.dumps({"error": f'Invalid capability for agent {agent_input.capability}. INFO not set.'}), 'elapsed_time': 0}
     # Push the agent
     response = await functions_and_agents_metadata.upsert_agents(agent_inputs)
     if response != "success":
@@ -159,7 +160,7 @@ async def upsertAgents(agent_inputs: List[UpsertAgentInput]):
         # Append the new agent to the category
         new_agent = {
             'name': agent_input.name,
-            'description': agent_input.description
+            'description': agent_input.description,
         }
         if agent_input.category in agents:
             agents[agent_input.category].append(new_agent)
@@ -254,6 +255,28 @@ async def getGroups(group_inputs: List[GetGroupModel]):
             response = err
     end = time.time()
     return {'response': response, 'elapsed_time': end-start}
+
+@app.post('/get_functions/')
+async def getFunctions(function_inputs: List[GetFunctionModel]):
+    """Endpoint to get function info."""
+    start = time.time()
+    if len(function_inputs) == 0:
+        return {'response': "No groups provided", 'elapsed_time': 0}
+    for function_input in function_inputs:
+        if function_input.auth.api_key == '':
+            return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
+        if function_input.auth.namespace_id == '':
+            return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
+        if function_input.name == '':
+            return {'response': json.dumps({"error": "function name not provided!"}), 'elapsed_time': 0}
+    response = await functions_and_agents_metadata.get_functions(function_inputs)
+    if not response:
+        for fn in function_inputs:
+            fn.auth.namespace_id = ""
+        response = await functions_and_agents_metadata.get_functions(function_inputs)
+    end = time.time()
+    return {'response': response, 'elapsed_time': end-start}
+
 
 @app.post('/upsert_groups/')
 async def upsertGroups(group_inputs: List[UpsertGroupInput]):
