@@ -81,7 +81,7 @@ class DiscoverFunctionsManager:
         result = []
         # Continue with your existing logic but using `items_to_process`
         for item in data:
-            page_content = {'name': item['name'], 'category': category, 'status': str(item['status']), 'description': str(item['description'])}
+            page_content = {'name': item['name'], 'category': category, 'description': str(item['description'])}
             lenData = len(str(page_content))
             if lenData > self.max_length_allowed:
                 logging.info(
@@ -112,11 +112,10 @@ class DiscoverFunctionsManager:
             name = text.get('name')
             category = text.get('category')
             description = text.get('description')
-            status = text.get('status')
 
             # Check if this combination has been seen before
             if (name, category) not in seen:
-                result.append({'name': name, 'category': category, 'status': status, 'description': self._get_short_description(description)})
+                result.append({'name': name, 'category': category, 'description': self._get_short_description(description)})
                 seen.add((name, category))  # Mark this combination as seen
 
         return result

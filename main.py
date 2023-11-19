@@ -79,8 +79,7 @@ async def upsertFunctions(function_inputs: List[AddFunctionInput]):
             # Append the new function to the category
             new_function = {
                 'name': function_input.name,
-                'description': function_input.description,
-                'status': function_input.status
+                'description': function_input.description
             }
             if function_input.category in functions:
                 functions[function_input.category].append(new_function)
