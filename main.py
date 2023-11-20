@@ -136,7 +136,7 @@ async def upsertAgents(agent_inputs: List[UpsertAgentModel]):
         if agent_input.description and agent_input.description == '':
             return {'response': json.dumps({"error": "agent description not provided!"}), 'elapsed_time': 0}
         if agent_input.category:
-            agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'user']
+            agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning']
             if agent_input.category not in agent_types:
                 return {'response': json.dumps({"error": f'Invalid category for agent {agent_input.name}, must be one of {agent_types}'}), 'elapsed_time': 0}
         if agent_input.human_input_mode:
@@ -195,7 +195,7 @@ async def discoverAgents(agent_input: DiscoverAgentsModel):
         return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
     if agent_input.auth.namespace_id == '':
         return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
-    agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning', 'user']
+    agent_types = ['information_retrieval', 'communication', 'data_processing', 'sensory_perception', 'programming', 'planning']
 
     if agent_input.category != "" and agent_input.category not in agent_types:
         return {'response': json.dumps({"error": f'Invalid category {agent_input.category}, must be one of {agent_types}'})}
