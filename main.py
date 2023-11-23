@@ -19,10 +19,13 @@ load_dotenv()
 app = FastAPI()
 INFO = 1
 TERMINATE = 2
-CODE_INTERPRETER = 4
-RETRIEVAL = 8
-FILES = 16
-MANAGEMENT = 32
+OPENAI_CODE_INTERPRETER = 4
+LOCAL_CODE_INTERPRETER = 8
+FUNCTION_CODER = 16
+OPENAI_RETRIEVAL = 32
+OPENAI_FILES = 64
+MANAGEMENT = 128
+
 # Initialize logging
 LOGFILE_PATH = os.path.join(os.path.dirname(
     os.path.abspath(__file__)), 'app.log')
