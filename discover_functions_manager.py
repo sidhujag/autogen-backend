@@ -101,7 +101,7 @@ class DiscoverFunctionsManager:
         return result
 
     def _get_short_description(self, full_description: str) -> str:
-        return (full_description[:75] + '...') if len(full_description) > 75 else full_description
+        return (full_description[:640] + '...') if len(full_description) > 640 else full_description
 
     def extract_details(self, documents):
         result = []

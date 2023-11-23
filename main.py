@@ -18,10 +18,11 @@ load_dotenv()
 
 app = FastAPI()
 INFO = 1
-CODE_INTERPRETER = 2
-RETRIEVAL = 4
-FILES = 8
-MANAGEMENT = 16
+TERMINATE = 2
+CODE_INTERPRETER = 4
+RETRIEVAL = 8
+FILES = 16
+MANAGEMENT = 32
 # Initialize logging
 LOGFILE_PATH = os.path.join(os.path.dirname(
     os.path.abspath(__file__)), 'app.log')
@@ -144,10 +145,8 @@ async def upsertAgents(agent_inputs: List[UpsertAgentModel]):
             if agent_input.human_input_mode not in human_input_types:
                 return {'response': json.dumps({"error": f'Invalid human_input_mode for agent {agent_input.human_input_mode}, must be one of {human_input_types}'}), 'elapsed_time': 0}
         if agent_input.capability:
-            if agent_input.capability < INFO or agent_input.capability > (MANAGEMENT*2 - 1):
+            if agent_input.capability < 0 or agent_input.capability > (MANAGEMENT*2 - 1):
                 return {'response': json.dumps({"error": f'Invalid capability for agent {agent_input.capability}'}), 'elapsed_time': 0}
-            if not agent_input.capability & INFO:
-                return {'response': json.dumps({"error": f'Invalid capability for agent {agent_input.capability}. INFO not set.'}), 'elapsed_time': 0}
     # Push the agent
     response = await functions_and_agents_metadata.upsert_agents(agent_inputs)
     if response != "success":
