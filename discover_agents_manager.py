@@ -64,7 +64,7 @@ class DiscoverAgentsManager:
             logging.info(
                 f"DiscoverAgentsManager: Creating memory store with collection {self.collection_name}")
             vectorstore = Qdrant(self.client, self.collection_name, OpenAIEmbeddings(openai_api_key=api_key))
-            compressor = CohereRerank()
+            compressor = CohereRerank(top_n=5)
             compression_retriever = ContextualCompressionRetriever(
                 base_compressor=compressor, base_retriever=QDrantVectorStoreRetriever(
                     rate_limiter=self.rate_limiter, rate_limiter_sync=self.rate_limiter_sync, collection_name=self.collection_name, client=self.client, vectorstore=vectorstore,
@@ -83,7 +83,7 @@ class DiscoverAgentsManager:
         result = []
         # Continue with your existing logic but using `items_to_process`
         for item in data:
-            page_content = {'name': item['name'], 'category': category, 'description': str(item['description'])}
+            page_content = {'name': item['name'], 'category': category, 'description': str(item['description'])[:860]}
             lenData = len(str(page_content))
             if lenData > self.max_length_allowed:
                 logging.info(
