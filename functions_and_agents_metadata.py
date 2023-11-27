@@ -329,7 +329,8 @@ class FunctionsAndAgentsMetadata:
                     return json.dumps({"error": "New agents must have a category defined."})
                 if agent_upsert.functions_to_add:
                     if not await self.do_functions_exist(agent_upsert.auth.namespace_id, agent_upsert.functions_to_add):
-                        return json.dumps({"error": "One of the functions you are trying to add does not exist"})
+                        liststr = ", ".join(agent_upsert.functions_to_add)
+                        return json.dumps({"error": f"One of the functions you are trying to add does not exist from list: {liststr}"})
                 # Generate the update dictionary using Pydantic's .dict() method
                 update_data = agent_upsert.dict(exclude_none=True, exclude={'functions_to_add', 'functions_to_remove', 'files_to_add', 'files_to_remove'})
                 # Create the update operation for the agent
