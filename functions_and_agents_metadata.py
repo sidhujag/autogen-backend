@@ -69,8 +69,7 @@ class UpsertCodingAssistantInput(BaseModel):
     github_user: Optional[str] = None
     github_auth_token: Optional[str] = None
     model: Optional[str] = None
-    files_to_add: Optional[List[str]] = None
-    files_to_remove: Optional[List[str]] = None
+    files: Optional[List[str]] = None
     show_diffs: Optional[bool] = None
     dry_run: Optional[bool] = None
     map_tokens: Optional[int] = None
@@ -487,29 +486,12 @@ class FunctionsAndAgentsMetadata:
                         return json.dumps({"error": "New coding assistant must have a Github User."})
                     if existing_assistant.github_auth_token is None:
                         return json.dumps({"error": "New coding assistant must have a Github Auth token."})
-                query = {
-                    "repository_name": coding_assistant_upsert.repository_name, 
-                    "namespace_id": coding_assistant_upsert.auth.namespace_id
-                }
-                update = {
-                    "$set": {k: v for k, v in coding_assistant_upsert.dict(exclude_none=True).items() if k not in ['files_to_add', 'files_to_remove']},
-                    "$addToSet": {
-                        "files": {"$each": coding_assistant_upsert.files_to_add} if coding_assistant_upsert.files_to_add else None
-                    },
-                    "$pull": {
-                        "files": {"$in": coding_assistant_upsert.files_to_remove} if coding_assistant_upsert.files_to_remove else None
-                    }
-                }
-                # Clean up the update dict to remove keys with `None` values
-                update["$addToSet"] = {k: v for k, v in update.get("$addToSet", {}).items() if v is not None}
-                update["$pull"] = {k: v for k, v in update.get("$pull", {}).items() if v is not None}
-                
-                # If after cleaning, the dictionaries are empty, remove them from the update
-                if not update["$addToSet"]:
-                    del update["$addToSet"]
-                if not update["$pull"]:
-                    del update["$pull"]
-                update_op = pymongo.UpdateOne(query, update, upsert=True)
+               
+                update_op = pymongo.UpdateOne(
+                    {"repository_name": coding_assistant_upsert.repository_name, "namespace_id": coding_assistant_upsert.auth.namespace_id},
+                    {"$set": coding_assistant_upsert.dict()},
+                    upsert=True
+                )
                 operations.append(update_op)
 
             if operations:
