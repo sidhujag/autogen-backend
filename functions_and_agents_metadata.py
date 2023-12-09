@@ -35,6 +35,10 @@ class GetFunctionModel(BaseModel):
     name: str
     auth: AuthAgent
 
+class GetCodingAssistantsModel(BaseModel):
+    repository_name: str
+    auth: AuthAgent
+
 class UpsertAgentModel(BaseModel):
     name: str
     auth: AuthAgent
@@ -58,6 +62,20 @@ class UpsertGroupInput(BaseModel):
     agents_to_remove: Optional[List[str]] = None
     locked: Optional[bool] = None
     
+class UpsertCodingAssistantInput(BaseModel):
+    repository_name: str
+    auth: AuthAgent
+    description: Optional[str] = None
+    github_user: Optional[str] = None
+    github_auth_token: Optional[str] = None
+    model: Optional[str] = None
+    files_to_add: Optional[List[str]] = None
+    files_to_remove: Optional[List[str]] = None
+    show_diffs: Optional[bool] = None
+    dry_run: Optional[bool] = None
+    map_tokens: Optional[int] = None
+    verbose: Optional[bool] = None
+
 class AgentStats(BaseModel):
     count: int
     description: str
@@ -98,7 +116,20 @@ class BaseFunction(BaseModel):
     category: str
     function_code: str = Field(default="")
     class_name: str = Field(default="")
-    
+
+class BaseCodingAssistant(BaseModel):
+    repository_name: str = Field(default="")
+    auth: AuthAgent
+    description: str = Field(default="")
+    github_user: str = Field(default="")
+    github_auth_token: str = Field(default="")
+    model: str = Field(default="")
+    files: List[str] = Field(default=[])
+    show_diffs: bool = Field(default=False)
+    dry_run: bool = Field(default=False)
+    map_tokens: int = Field(default=1024)
+    verbose: bool = Field(default=False)
+
 class AddFunctionModel(BaseFunction):
     namespace_id: str = Field(default="")
 
@@ -131,6 +162,7 @@ class FunctionsAndAgentsMetadata:
         self.funcs_collection = None
         self.agents_collection = None
         self.groups_collection = None
+        self.coding_assistants_collection = None
         self.db = None
         self.rate_limiter = None
         self.init_lock = Lock()
@@ -152,6 +184,8 @@ class FunctionsAndAgentsMetadata:
                 await self.agents_collection.create_index([("name", pymongo.ASCENDING), ("namespace_id", pymongo.ASCENDING)], unique=True)
                 self.groups_collection = self.db['Groups']
                 await self.groups_collection.create_index([("name", pymongo.ASCENDING), ("namespace_id", pymongo.ASCENDING)], unique=True)
+                self.coding_assistants_collection = self.db['CodingAssistants']
+                await self.coding_assistants_collection.create_index([("repository_name", pymongo.ASCENDING), ("namespace_id", pymongo.ASCENDING)], unique=True)
                 self.rate_limiter = RateLimiter(rate=10, period=1)
                 
             except Exception as e:
@@ -434,6 +468,68 @@ class FunctionsAndAgentsMetadata:
             logging.warning(f"FunctionsAndAgentsMetadata: upsert_groups exception {e}\n{traceback.format_exc()}")
             return json.dumps({"error": str(e)})
 
+    async def upsert_coding_assistants(self, coding_assistants_upsert: List[UpsertCodingAssistantInput]) -> str:
+        if self.client is None or self.coding_assistants_collection is None or self.rate_limiter is None:
+            await self.initialize()
+
+        operations = []
+        try:
+            for coding_assistant_upsert in coding_assistants_upsert:
+                # Check if the assistant exists
+                existing_assistant = await self.coding_assistants_collection.find_one(
+                    {"repository_name": coding_assistant_upsert.repository_name, "namespace_id": coding_assistant_upsert.auth.namespace_id}
+                )
+
+                if not existing_assistant:
+                    if existing_assistant.description is None:
+                        return json.dumps({"error": "New coding assistant must have a description."})
+                    if existing_assistant.github_user is None:
+                        return json.dumps({"error": "New coding assistant must have a Github User."})
+                    if existing_assistant.github_auth_token is None:
+                        return json.dumps({"error": "New coding assistant must have a Github Auth token."})
+                query = {
+                    "repository_name": coding_assistant_upsert.repository_name, 
+                    "namespace_id": coding_assistant_upsert.auth.namespace_id
+                }
+                update = {
+                    "$set": {k: v for k, v in coding_assistant_upsert.dict(exclude_none=True).items() if k not in ['files_to_add', 'files_to_remove']},
+                    "$addToSet": {
+                        "files": {"$each": coding_assistant_upsert.files_to_add} if coding_assistant_upsert.files_to_add else None
+                    },
+                    "$pull": {
+                        "files": {"$in": coding_assistant_upsert.files_to_remove} if coding_assistant_upsert.files_to_remove else None
+                    }
+                }
+                # Clean up the update dict to remove keys with `None` values
+                update["$addToSet"] = {k: v for k, v in update.get("$addToSet", {}).items() if v is not None}
+                update["$pull"] = {k: v for k, v in update.get("$pull", {}).items() if v is not None}
+                
+                # If after cleaning, the dictionaries are empty, remove them from the update
+                if not update["$addToSet"]:
+                    del update["$addToSet"]
+                if not update["$pull"]:
+                    del update["$pull"]
+                update_op = pymongo.UpdateOne(query, update, upsert=True)
+                operations.append(update_op)
+
+            if operations:
+                result = await self.rate_limiter.execute(
+                    self.coding_assistants_collection.bulk_write,
+                    operations
+                )
+                # Check if anything was actually modified or upserted
+                if result.modified_count + result.upserted_count == 0:
+                    return json.dumps({"error": "No coding assistants were upserted, no changes found!"})
+                return "success"
+            else:
+                return json.dumps({"error": "No coding assistants were provided."})
+        except PyMongoError as e:
+            logging.warning(f"FunctionsAndAgentsMetadata: upsert_coding_assistants exception {e}\n{traceback.format_exc()}")
+            return json.dumps({"error": f"MongoDB error occurred while upsert_coding_assistants agents: {str(e)}"})
+        except Exception as e:
+            logging.warning(f"FunctionsAndAgentsMetadata: upsert_coding_assistants exception {e}\n{traceback.format_exc()}")
+            return json.dumps({"error": str(e)})
+
     async def delete_agents(self, agents_delete: List[DeleteAgentModel]):
         if not agents_delete:
             return json.dumps({"error": "Agent delete list is empty"})
@@ -476,6 +572,28 @@ class FunctionsAndAgentsMetadata:
             return [], json.dumps({"error": f"MongoDB error occurred while retrieving groups: {str(e)}"})
         except Exception as e:
             logging.warning(f"FunctionsAndGroupsMetadata: get_groups exception {e}\n{traceback.format_exc()}")
+            return [], json.dumps({"error": str(e)})
+
+    async def get_coding_assistants(self, code_inputs: List[GetCodingAssistantsModel]) -> Tuple[List[BaseCodingAssistant], str]:
+        if not code_inputs:
+            return [], json.dumps({"error": "code assistant input list is empty"})
+        
+        if self.client is None or self.coding_assistants_collection is None or self.rate_limiter is None:
+            await self.initialize()
+
+        try:
+            unique_coding_assistants = {(code_input.repository_name, code_input.auth.namespace_id) for code_input in code_inputs}
+            names, namespace_ids = zip(*unique_coding_assistants)
+            query = {"repository_name": {"$in": names}, "namespace_id": {"$in": namespace_ids}}
+            doc_cursor = self.coding_assistants_collection.find(query)
+            groups_docs = await self.rate_limiter.execute(doc_cursor.to_list, length=None)
+            groups = [BaseCodingAssistant(**doc) for doc in groups_docs]
+            return groups, None
+        except PyMongoError as e:
+            logging.warning(f"FunctionsAndGroupsMetadata: get_coding_assistants exception {e}\n{traceback.format_exc()}")
+            return [], json.dumps({"error": f"MongoDB error occurred while retrieving groups: {str(e)}"})
+        except Exception as e:
+            logging.warning(f"FunctionsAndGroupsMetadata: get_coding_assistants exception {e}\n{traceback.format_exc()}")
             return [], json.dumps({"error": str(e)})
 
     async def get_agent_groups(self, agent_names: List[str], namespace_id: str) -> Dict[str, List[str]]:

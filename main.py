@@ -8,7 +8,8 @@ from fastapi import FastAPI
 from discover_functions_manager import DiscoverFunctionsManager, DiscoverFunctionsModel
 from discover_agents_manager import DiscoverAgentsManager, DiscoverAgentsModel
 from discover_groups_manager import DiscoverGroupsManager, DiscoverGroupsModel
-from functions_and_agents_metadata import GetFunctionModel, FunctionsAndAgentsMetadata, GetGroupModel, UpsertGroupInput, UpdateComms, AddFunctionInput, GetAgentModel, DeleteAgentModel, UpsertAgentModel
+from discover_coding_assistants_manager import DiscoverCodingAssistantsManager, DiscoverCodingAssistantsModel
+from functions_and_agents_metadata import GetCodingAssistantsModel, UpsertCodingAssistantInput, GetFunctionModel, FunctionsAndAgentsMetadata, GetGroupModel, UpsertGroupInput, UpdateComms, AddFunctionInput, GetAgentModel, DeleteAgentModel, UpsertAgentModel
 from rate_limiter import RateLimiter, SyncRateLimiter
 from typing import List
 rate_limiter = RateLimiter(rate=10, period=1)  # Allow 5 tasks per second
@@ -17,14 +18,7 @@ rate_limiter_sync = SyncRateLimiter(rate=10, period=1)
 load_dotenv()
 
 app = FastAPI()
-INFO = 1
-TERMINATE = 2
-OPENAI_CODE_INTERPRETER = 4
-LOCAL_CODE_INTERPRETER = 8
-FUNCTION_CODER = 16
-OPENAI_RETRIEVAL = 32
-OPENAI_FILES = 64
-MANAGEMENT = 128
+MAX_CAPABILITY = 128
 
 # Initialize logging
 LOGFILE_PATH = os.path.join(os.path.dirname(
@@ -36,6 +30,7 @@ logging.basicConfig(filename=LOGFILE_PATH, filemode='w',
 discover_functions_manager = DiscoverFunctionsManager(rate_limiter, rate_limiter_sync)
 discover_agents_manager = DiscoverAgentsManager(rate_limiter, rate_limiter_sync)
 discover_groups_manager = DiscoverGroupsManager(rate_limiter, rate_limiter_sync)
+discover_coding_assistants_manager = DiscoverCodingAssistantsManager(rate_limiter, rate_limiter_sync)
 functions_and_agents_metadata = FunctionsAndAgentsMetadata()
 
 
@@ -148,7 +143,7 @@ async def upsertAgents(agent_inputs: List[UpsertAgentModel]):
             if agent_input.human_input_mode not in human_input_types:
                 return {'response': json.dumps({"error": f'Invalid human_input_mode for agent {agent_input.human_input_mode}, must be one of {human_input_types}'}), 'elapsed_time': 0}
         if agent_input.capability:
-            if agent_input.capability < 0 or agent_input.capability > (MANAGEMENT*2 - 1):
+            if agent_input.capability < 0 or agent_input.capability > (MAX_CAPABILITY*2 - 1):
                 return {'response': json.dumps({"error": f'Invalid capability for agent {agent_input.capability}'}), 'elapsed_time': 0}
     # Push the agent
     response = await functions_and_agents_metadata.upsert_agents(agent_inputs)
@@ -257,6 +252,43 @@ async def getGroups(group_inputs: List[GetGroupModel]):
     end = time.time()
     return {'response': response, 'elapsed_time': end-start}
 
+
+@app.post('/get_coding_assistants/')
+async def getCodingAssistants(code_inputs: List[GetCodingAssistantsModel]):
+    """Endpoint to get coding assistant info."""
+    start = time.time()
+    if len(code_inputs) == 0:
+        return {'response': "No coding assistants provided", 'elapsed_time': 0}
+    for code_input in code_inputs:
+        if code_input.auth.api_key == '':
+            return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
+        if code_input.auth.namespace_id == '':
+            return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
+        if code_input.repository_name == '':
+            return {'response': json.dumps({"error": "repository name not provided!"}), 'elapsed_time': 0}
+    response, err = await functions_and_agents_metadata.get_coding_assistants(code_inputs)
+    if err is not None:
+        for group in code_inputs:
+            group.auth.namespace_id = ""
+        response, err = await functions_and_agents_metadata.get_coding_assistants(code_inputs)
+        if err is not None:
+            response = err
+    end = time.time()
+    return {'response': response, 'elapsed_time': end-start}
+
+@app.post('/discover_coding_assistants/')
+async def discoverCodingAssistants(code_input: DiscoverCodingAssistantsModel):
+    """Endpoint to discover coding assistants."""
+    start = time.time()
+    if code_input.auth.api_key == '':
+        return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
+    if code_input.auth.namespace_id == '':
+        return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
+
+    result = await discover_coding_assistants_manager.pull_coding_assistants(code_input)
+    end = time.time()
+    return {'response': result, 'elapsed_time': end-start}
+
 @app.post('/get_functions/')
 async def getFunctions(function_inputs: List[GetFunctionModel]):
     """Endpoint to get function info."""
@@ -312,6 +344,46 @@ async def upsertGroups(group_inputs: List[UpsertGroupInput]):
     
     if len(groups) > 0:
         response = await discover_groups_manager.push_groups(group_inputs[0].auth, groups)
+    end = time.time()
+    return {'response': response, 'elapsed_time': end-start}
+
+
+@app.post('/upsert_coding_assistants/')
+async def upsertCodingAssistants(code_inputs: List[UpsertCodingAssistantInput]):
+    """Endpoint to upsert coding assistants."""
+    if len(code_inputs) == 0:
+        return {'response': "No coding assistants provided", 'elapsed_time': 0}
+    start = time.time()
+    assistants = []
+    for code_input in code_inputs:
+        if code_input.auth.api_key == '':
+            return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
+        if code_input.auth.namespace_id == '':
+            return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
+        if code_input.repository_name == '':
+            return {'response': json.dumps({"error": "repository name not provided!"}), 'elapsed_time': 0}
+        if code_input.description and code_input.description == '':
+            return {'response': json.dumps({"error": "coding assistant description not provided!"}), 'elapsed_time': 0}
+        if code_input.github_user and code_input.github_user == '':
+            return {'response': json.dumps({"error": "coding assistant github_user not provided!"}), 'elapsed_time': 0}
+        if code_input.github_auth_token and code_input.github_auth_token == '':
+            return {'response': json.dumps({"error": "coding assistant github_auth_token not provided!"}), 'elapsed_time': 0}
+    # Push the assistant
+    response = await functions_and_agents_metadata.upsert_coding_assistants(code_inputs)
+    if response != "success":
+        end = time.time()
+        return {'response': response, 'elapsed_time': end-start}
+    for code_input in code_inputs:
+        if not code_input.description:
+            continue
+        new_group = {
+            'name': code_input.repository_name,
+            'description': code_input.description
+        }
+        assistants.append(new_group)
+    
+    if len(assistants) > 0:
+        response = await discover_coding_assistants_manager.push_coding_assistants(code_inputs[0].auth, assistants)
     end = time.time()
     return {'response': response, 'elapsed_time': end-start}
 
