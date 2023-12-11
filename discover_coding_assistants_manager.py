@@ -109,7 +109,7 @@ class DiscoverCodingAssistantsManager:
 
             # Check if this combination has been seen before
             if name not in seen:
-                result.append({'repository_name': name})
+                result.append({'gh_remote_url': name})
                 seen.add(name)
 
         return result

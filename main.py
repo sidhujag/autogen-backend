@@ -264,7 +264,7 @@ async def getCodingAssistants(code_inputs: List[GetCodingAssistantsModel]):
             return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
         if code_input.auth.namespace_id == '':
             return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
-        if code_input.repository_name == '':
+        if code_input.gh_remote_url == '':
             return {'response': json.dumps({"error": "repository name not provided!"}), 'elapsed_time': 0}
     response, err = await functions_and_agents_metadata.get_coding_assistants(code_inputs)
     if err is not None:
@@ -360,12 +360,10 @@ async def upsertCodingAssistants(code_inputs: List[UpsertCodingAssistantInput]):
             return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
         if code_input.auth.namespace_id == '':
             return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
-        if code_input.repository_name == '':
+        if code_input.gh_remote_url == '':
             return {'response': json.dumps({"error": "repository name not provided!"}), 'elapsed_time': 0}
         if code_input.description and code_input.description == '':
             return {'response': json.dumps({"error": "coding assistant description not provided!"}), 'elapsed_time': 0}
-        if code_input.github_auth_token and code_input.github_auth_token == '':
-            return {'response': json.dumps({"error": "coding assistant github_auth_token not provided!"}), 'elapsed_time': 0}
     # Push the assistant
     response = await functions_and_agents_metadata.upsert_coding_assistants(code_inputs)
     if response != "success":
@@ -375,7 +373,7 @@ async def upsertCodingAssistants(code_inputs: List[UpsertCodingAssistantInput]):
         if not code_input.description:
             continue
         new_group = {
-            'name': code_input.repository_name,
+            'name': code_input.gh_remote_url,
             'description': code_input.description
         }
         assistants.append(new_group)

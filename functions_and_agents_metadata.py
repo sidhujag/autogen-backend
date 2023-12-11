@@ -36,7 +36,7 @@ class GetFunctionModel(BaseModel):
     auth: AuthAgent
 
 class GetCodingAssistantsModel(BaseModel):
-    repository_name: str
+    gh_remote_url: str
     auth: AuthAgent
 
 class UpsertAgentModel(BaseModel):
@@ -71,10 +71,9 @@ class UpsertGroupInput(BaseModel):
         return data
 
 class UpsertCodingAssistantInput(BaseModel):
-    repository_name: str
+    gh_remote_url: str
     auth: AuthAgent
     description: Optional[str] = None
-    github_auth_token: Optional[str] = None
     model: Optional[str] = None
     files: Optional[List[str]] = None
     show_diffs: Optional[bool] = None
@@ -128,10 +127,9 @@ class BaseFunction(BaseModel):
     class_name: str = Field(default="")
 
 class BaseCodingAssistant(BaseModel):
-    repository_name: str = Field(default="")
+    gh_remote_url: str = Field(default="")
     auth: AuthAgent
     description: str = Field(default="")
-    github_auth_token: str = Field(default="")
     model: str = Field(default="")
     files: List[str] = Field(default=[])
     show_diffs: bool = Field(default=False)
@@ -194,7 +192,7 @@ class FunctionsAndAgentsMetadata:
                 self.groups_collection = self.db['Groups']
                 await self.groups_collection.create_index([("name", pymongo.ASCENDING), ("namespace_id", pymongo.ASCENDING)], unique=True)
                 self.coding_assistants_collection = self.db['CodingAssistants']
-                await self.coding_assistants_collection.create_index([("repository_name", pymongo.ASCENDING), ("namespace_id", pymongo.ASCENDING)], unique=True)
+                await self.coding_assistants_collection.create_index([("gh_remote_url", pymongo.ASCENDING), ("namespace_id", pymongo.ASCENDING)], unique=True)
                 self.rate_limiter = RateLimiter(rate=10, period=1)
                 
             except Exception as e:
@@ -486,17 +484,15 @@ class FunctionsAndAgentsMetadata:
             for coding_assistant_upsert in coding_assistants_upsert:
                 # Check if the assistant exists
                 existing_assistant = await self.coding_assistants_collection.find_one(
-                    {"repository_name": coding_assistant_upsert.repository_name, "namespace_id": coding_assistant_upsert.auth.namespace_id}
+                    {"gh_remote_url": coding_assistant_upsert.gh_remote_url, "namespace_id": coding_assistant_upsert.auth.namespace_id}
                 )
 
                 if not existing_assistant:
                     if existing_assistant.description is None:
                         return json.dumps({"error": "New coding assistant must have a description."})
-                    if existing_assistant.github_auth_token is None:
-                        return json.dumps({"error": "New coding assistant must have a Github Auth token."})
-               
+    
                 update_op = pymongo.UpdateOne(
-                    {"repository_name": coding_assistant_upsert.repository_name, "namespace_id": coding_assistant_upsert.auth.namespace_id},
+                    {"gh_remote_url": coding_assistant_upsert.gh_remote_url, "namespace_id": coding_assistant_upsert.auth.namespace_id},
                     {"$set": coding_assistant_upsert.exclude_auth_dict()},
                     upsert=True
                 )
@@ -572,9 +568,9 @@ class FunctionsAndAgentsMetadata:
             await self.initialize()
 
         try:
-            unique_coding_assistants = {(code_input.repository_name, code_input.auth.namespace_id) for code_input in code_inputs}
+            unique_coding_assistants = {(code_input.gh_remote_url, code_input.auth.namespace_id) for code_input in code_inputs}
             names, namespace_ids = zip(*unique_coding_assistants)
-            query = {"repository_name": {"$in": names}, "namespace_id": {"$in": namespace_ids}}
+            query = {"gh_remote_url": {"$in": names}, "namespace_id": {"$in": namespace_ids}}
             doc_cursor = self.coding_assistants_collection.find(query)
             groups_docs = await self.rate_limiter.execute(doc_cursor.to_list, length=None)
             groups = [BaseCodingAssistant(**doc) for doc in groups_docs]
