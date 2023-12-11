@@ -53,6 +53,10 @@ class UpsertAgentModel(BaseModel):
     capability: Optional[int] = None
     files_to_add: Optional[Dict[str, str]] = None
     files_to_remove: Optional[List[str]] = None
+    def exclude_auth_dict(self):
+        data = self.dict(exclude_none=True, exclude={'functions_to_add', 'functions_to_remove', 'files_to_add', 'files_to_remove', 'auth'})
+        data.update(self.auth.to_dict())
+        return data
 
 class UpsertGroupInput(BaseModel):
     name: str
@@ -371,7 +375,7 @@ class FunctionsAndAgentsMetadata:
                         liststr = ", ".join(agent_upsert.functions_to_add)
                         return json.dumps({"error": f"One of the functions you are trying to add does not exist from list: {liststr}"})
                 # Generate the update dictionary using Pydantic's .dict() method
-                update_data = agent_upsert.dict(exclude_none=True, exclude={'functions_to_add', 'functions_to_remove', 'files_to_add', 'files_to_remove'})
+                update_data = agent_upsert.exclude_auth_dict()
                 # Create the update operation for the agent
                 update = {"$set": update_data}
 
