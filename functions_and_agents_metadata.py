@@ -61,12 +61,15 @@ class UpsertGroupInput(BaseModel):
     agents_to_add: Optional[List[str]] = None
     agents_to_remove: Optional[List[str]] = None
     locked: Optional[bool] = None
-    
+    def exclude_auth_dict(self):
+        data = self.dict(exclude={"auth"}, exclude_none=True)
+        data.update(self.auth.to_dict())
+        return data
+
 class UpsertCodingAssistantInput(BaseModel):
     repository_name: str
     auth: AuthAgent
     description: Optional[str] = None
-    github_user: Optional[str] = None
     github_auth_token: Optional[str] = None
     model: Optional[str] = None
     files: Optional[List[str]] = None
@@ -74,6 +77,10 @@ class UpsertCodingAssistantInput(BaseModel):
     dry_run: Optional[bool] = None
     map_tokens: Optional[int] = None
     verbose: Optional[bool] = None
+    def exclude_auth_dict(self):
+        data = self.dict(exclude={"auth"}, exclude_none=True)
+        data.update(self.auth.to_dict())
+        return data
 
 class AgentStats(BaseModel):
     count: int
@@ -120,7 +127,6 @@ class BaseCodingAssistant(BaseModel):
     repository_name: str = Field(default="")
     auth: AuthAgent
     description: str = Field(default="")
-    github_user: str = Field(default="")
     github_auth_token: str = Field(default="")
     model: str = Field(default="")
     files: List[str] = Field(default=[])
@@ -142,7 +148,7 @@ class AddFunctionInput(BaseModel):
     class_name: str = None
     parameters: OpenAIParameter = OpenAIParameter(type="object", properties={})
     function_code: Optional[str] = None
-    def to_add_function_model_dict(self):
+    def exclude_auth_dict(self):
         data = self.dict(exclude={"auth"}, exclude_none=True)
         data.update(self.auth.to_dict())
         return data
@@ -320,7 +326,7 @@ class FunctionsAndAgentsMetadata:
                     elif existing_function_model.status == "accepted" and not function.status and function.function_code:
                         return json.dumps({"error": "Currently accepted function must change status (to either development or testing) if you are updating code."})
                     
-                function_model_data = function.to_add_function_model_dict()
+                function_model_data = function.exclude_auth_dict()
                 function_model = AddFunctionModel(**function_model_data)
                 update_op = pymongo.UpdateOne(
                     {"name": function.name, "namespace_id": function.auth.namespace_id},
@@ -429,7 +435,7 @@ class FunctionsAndAgentsMetadata:
                     "namespace_id": group_upsert.auth.namespace_id
                 }
                 update = {
-                    "$set": {k: v for k, v in group_upsert.dict(exclude_none=True).items() if k not in ['agents_to_add', 'agents_to_remove']},
+                    "$set": {k: v for k, v in group_upsert.exclude_auth_dict().items() if k not in ['agents_to_add', 'agents_to_remove']},
                     "$addToSet": {
                         "agent_names": {"$each": group_upsert.agents_to_add} if group_upsert.agents_to_add else None
                     },
@@ -482,14 +488,12 @@ class FunctionsAndAgentsMetadata:
                 if not existing_assistant:
                     if existing_assistant.description is None:
                         return json.dumps({"error": "New coding assistant must have a description."})
-                    if existing_assistant.github_user is None:
-                        return json.dumps({"error": "New coding assistant must have a Github User."})
                     if existing_assistant.github_auth_token is None:
                         return json.dumps({"error": "New coding assistant must have a Github Auth token."})
                
                 update_op = pymongo.UpdateOne(
                     {"repository_name": coding_assistant_upsert.repository_name, "namespace_id": coding_assistant_upsert.auth.namespace_id},
-                    {"$set": coding_assistant_upsert.dict()},
+                    {"$set": coding_assistant_upsert.exclude_auth_dict()},
                     upsert=True
                 )
                 operations.append(update_op)

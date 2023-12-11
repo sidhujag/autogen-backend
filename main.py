@@ -364,8 +364,6 @@ async def upsertCodingAssistants(code_inputs: List[UpsertCodingAssistantInput]):
             return {'response': json.dumps({"error": "repository name not provided!"}), 'elapsed_time': 0}
         if code_input.description and code_input.description == '':
             return {'response': json.dumps({"error": "coding assistant description not provided!"}), 'elapsed_time': 0}
-        if code_input.github_user and code_input.github_user == '':
-            return {'response': json.dumps({"error": "coding assistant github_user not provided!"}), 'elapsed_time': 0}
         if code_input.github_auth_token and code_input.github_auth_token == '':
             return {'response': json.dumps({"error": "coding assistant github_auth_token not provided!"}), 'elapsed_time': 0}
     # Push the assistant
