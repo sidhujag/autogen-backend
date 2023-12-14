@@ -25,11 +25,11 @@ from functions_and_agents_metadata import AuthAgent
 from typing import List
 from concurrent.futures import ThreadPoolExecutor
 
-class DiscoverCodingAssistantsModel(BaseModel):
+class DiscoverCodeRepositoryModel(BaseModel):
     query: str
     auth: AuthAgent
 
-class DiscoverCodingAssistantsManager:
+class DiscoverCodeRepositoryManager:
 
     def __init__(self, rate_limiter, rate_limiter_sync):
         load_dotenv()  # Load environment variables
@@ -40,12 +40,12 @@ class DiscoverCodingAssistantsManager:
         self.rate_limiter = rate_limiter
         self.rate_limiter_sync = rate_limiter_sync
         self.max_length_allowed = 1024
-        self.collection_name = "discover_coding_assistants"
+        self.collection_name = "discover_code_repository"
         self.client = QdrantClient(url=self.QDRANT_URL, api_key=self.QDRANT_API_KEY)
         self.inited = False
         
         
-    def create_new_coding_assistants_retriever(self, api_key: str):
+    def create_new_code_repository_retriever(self, api_key: str):
         """Create a new vector store retriever unique to the agent."""
         # create collection if it doesn't exist (if it exists it will fall into finally)
         try:
@@ -58,10 +58,10 @@ class DiscoverCodingAssistantsManager:
             )
             self.client.create_payload_index(self.collection_name, "metadata.namespace_id", field_schema=PayloadSchemaType.KEYWORD)
         except:
-            logging.info(f"DiscoverCodingAssistantsManager: loaded from cloud...")
+            logging.info(f"DiscoverCodeRepositoryManager: loaded from cloud...")
         finally:
             logging.info(
-                f"DiscoverCodingAssistantsManager: Creating memory store with collection {self.collection_name}")
+                f"DiscoverCodeRepositoryManager: Creating memory store with collection {self.collection_name}")
             vectorstore = Qdrant(self.client, self.collection_name, OpenAIEmbeddings(openai_api_key=api_key))
             compressor = CohereRerank(top_n=5)
             compression_retriever = ContextualCompressionRetriever(
@@ -85,7 +85,7 @@ class DiscoverCodingAssistantsManager:
             lenData = len(str(page_content))
             if lenData > self.max_length_allowed:
                 logging.info(
-                    f"DiscoverCodingAssistantsManager: transform tried to create an agent that surpasses the maximum length allowed max_length_allowed: {self.max_length_allowed} vs length of data: {lenData}")
+                    f"DiscoverCodeRepositoryManager: transform tried to create an agent that surpasses the maximum length allowed max_length_allowed: {self.max_length_allowed} vs length of data: {lenData}")
                 continue
             metadata = {
                 "id": self.generate_id_from_name(item['name']),
@@ -114,13 +114,13 @@ class DiscoverCodingAssistantsManager:
 
         return result
     
-    async def pull_coding_assistants(self, agent_input: DiscoverCodingAssistantsModel):
-        """Fetch coding_assistants based on a query."""
+    async def pull_code_repository(self, agent_input: DiscoverCodeRepositoryModel):
+        """Fetch code_repository based on a query."""
         if self.inited is False:
             try:
                 self.client.get_collection(self.collection_name)
             except Exception as e:
-                logging.warning(f"DiscoverCodingAssistantsManager: pull_coding_assistants exception {e}\n{traceback.format_exc()}")
+                logging.warning(f"DiscoverCodeRepositoryManager: pull_code_repository exception {e}\n{traceback.format_exc()}")
                 self.inited = True
         memory = self.load(agent_input.auth.api_key)
         response = []
@@ -136,15 +136,15 @@ class DiscoverCodingAssistantsManager:
                 for doc in documents:
                     doc.metadata.pop('relevance_score', None)
                 await self.rate_limiter.execute(memory.base_retriever.vectorstore.aadd_documents, documents, ids=ids)
-                #loop.run_in_executor(None, self.prune_coding_assistants)
+                #loop.run_in_executor(None, self.prune_code_repository)
         except Exception as e:
-            logging.warning(f"DiscoverCodingAssistantsManager: pull_coding_assistants exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"DiscoverCodeRepositoryManager: pull_code_repository exception {e}\n{traceback.format_exc()}")
         finally:
             return response
 
     async def get_retrieved_nodes(self, memory: ContextualCompressionRetriever, query_str: str, namespace_id: str):
         kwargs = {}
-        # if user provided then look for null or direct matches, otherwise look for null so it matches public coding_assistants
+        # if user provided then look for null or direct matches, otherwise look for null so it matches public code_repository
         if namespace_id != "":
             filter = rest.Filter(
                 should=[
@@ -176,30 +176,30 @@ class DiscoverCodingAssistantsManager:
     def load(self, api_key: str):
         """Load existing index data from the filesystem for a specific user."""
         start = time.time()
-        memory = self.create_new_coding_assistants_retriever(api_key)
+        memory = self.create_new_code_repository_retriever(api_key)
         end = time.time()
         logging.info(
-            f"DiscoverCodingAssistantsManager: Load operation took {end - start} seconds")
+            f"DiscoverCodeRepositoryManager: Load operation took {end - start} seconds")
         return memory
 
-    async def push_coding_assistants(self, auth: AuthAgent, coding_assistants):
-        """Update the current index with new coding_assistants."""
+    async def push_code_repository(self, auth: AuthAgent, code_repository):
+        """Update the current index with new code_repository."""
         memory = self.load(auth.api_key)
         try:
-            logging.info("DiscoverCodingAssistantsManager: pushing coding_assistants...")
+            logging.info("DiscoverCodeRepositoryManager: pushing code_repository...")
             all_docs = []
-            transformed_coding_assistants = await self.transform(
-                        auth.namespace_id, coding_assistants)
-            all_docs.extend(transformed_coding_assistants)
+            transformed_code_repository = await self.transform(
+                        auth.namespace_id, code_repository)
+            all_docs.extend(transformed_code_repository)
             ids = [doc.metadata["id"] for doc in all_docs]
             await self.rate_limiter.execute(memory.base_retriever.vectorstore.aadd_documents, all_docs, ids=ids)
         except Exception as e:
-            logging.warning(f"DiscoverCodingAssistantsManager: push_coding_assistants exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"DiscoverCodeRepositoryManager: push_code_repository exception {e}\n{traceback.format_exc()}")
         finally:
             return "success"
 
-    def prune_coding_assistants(self):
-        """Prune coding_assistants that haven't been used for atleast six weeks."""
+    def prune_code_repository(self):
+        """Prune code_repository that haven't been used for atleast six weeks."""
         def attempt_prune():
             current_time = datetime.now()
             six_weeks_ago = current_time - timedelta(weeks=6)
@@ -215,20 +215,20 @@ class DiscoverCodingAssistantsManager:
         try:
             attempt_prune()
         except Exception as e:
-            logging.warning(f"DiscoverCodingAssistantsManager: prune_coding_assistants exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"DiscoverCodeRepositoryManager: prune_code_repository exception {e}\n{traceback.format_exc()}")
             # Attempt a second prune after reload
             try:
                 attempt_prune()
             except Exception as e:
                 # If prune after reload fails, propagate the error upwards
-                logging.error(f"DiscoverCodingAssistantsManager: prune_coding_assistants failed after reload, exception {e}\n{traceback.format_exc()}")
+                logging.error(f"DiscoverCodeRepositoryManager: prune_code_repository failed after reload, exception {e}\n{traceback.format_exc()}")
                 raise
         return True
 
-    def delete_coding_assistants(self, auth: AuthAgent, coding_assistants: List[str]):
-        """Delete coding_assistants from the Qdrant collection."""
+    def delete_code_repository(self, auth: AuthAgent, code_repository: List[str]):
+        """Delete code_repository from the Qdrant collection."""
         try:
-            logging.info("DiscoverCodingAssistantsManager: deleting coding_assistants...")
+            logging.info("DiscoverCodeRepositoryManager: deleting code_repository...")
             filter_conditions = rest.Filter(
                 should=[
                     rest.FieldCondition(
@@ -237,13 +237,13 @@ class DiscoverCodingAssistantsManager:
                     ),
                     rest.FieldCondition(
                         key="name",
-                        match=rest.MatchAny(any=coding_assistants),
+                        match=rest.MatchAny(any=code_repository),
                     )
                 ]
             )
             self.client.delete(collection_name=self.collection_name, points_selector=filter_conditions)
             return "success"
         except Exception as e:
-            logging.warning(f"DiscoverCodingAssistantsManager: delete_coding_assistants exception {e}\n{traceback.format_exc()}")
+            logging.warning(f"DiscoverCodeRepositoryManager: delete_code_repository exception {e}\n{traceback.format_exc()}")
             return str(e)
 

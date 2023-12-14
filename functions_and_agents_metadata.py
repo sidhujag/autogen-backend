@@ -23,6 +23,18 @@ class DeleteAgentModel(BaseModel):
     name: str
     auth: AuthAgent
     
+class DeleteCodeAssistantsModel(BaseModel):
+    name: str
+    auth: AuthAgent
+
+class DeleteCodeRepositoryModel(BaseModel):
+    name: str
+    auth: AuthAgent
+    
+class DeleteGroupsModel(BaseModel):
+    name: str
+    auth: AuthAgent
+
 class GetAgentModel(BaseModel):
     name: str
     auth: AuthAgent
@@ -36,9 +48,13 @@ class GetFunctionModel(BaseModel):
     auth: AuthAgent
 
 class GetCodingAssistantsModel(BaseModel):
-    gh_remote_url: str
+    name: str
     auth: AuthAgent
 
+class GetCodeRepositoryModel(BaseModel):
+    name: str
+    auth: AuthAgent
+    
 class UpsertAgentModel(BaseModel):
     name: str
     auth: AuthAgent
@@ -71,7 +87,8 @@ class UpsertGroupInput(BaseModel):
         return data
 
 class UpsertCodingAssistantInput(BaseModel):
-    gh_remote_url: str
+    name: str
+    repository_name: str
     auth: AuthAgent
     description: Optional[str] = None
     model: Optional[str] = None
@@ -85,6 +102,19 @@ class UpsertCodingAssistantInput(BaseModel):
         data.update(self.auth.to_dict())
         return data
 
+class UpsertCodeRepositoryInput(BaseModel):
+    name: str
+    auth: AuthAgent
+    description: Optional[str] = None
+    private: Optional[bool] = None
+    gh_remote_url: Optional[str] = None
+    upstream_gh_remote_url: Optional[str] = None
+    associated_code_assistants: Optional[set[str]] = None
+    def exclude_auth_dict(self):
+        data = self.dict(exclude={"auth"}, exclude_none=True)
+        data.update(self.auth.to_dict())
+        return data
+    
 class AgentStats(BaseModel):
     count: int
     description: str
@@ -127,8 +157,9 @@ class BaseFunction(BaseModel):
     class_name: str = Field(default="")
 
 class BaseCodingAssistant(BaseModel):
-    gh_remote_url: str = Field(default="")
+    name: str = Field(default="")
     auth: AuthAgent
+    repository_name: str = Field(default="")
     description: str = Field(default="")
     model: str = Field(default="")
     files: List[str] = Field(default=[])
@@ -137,6 +168,15 @@ class BaseCodingAssistant(BaseModel):
     map_tokens: int = Field(default=1024)
     verbose: bool = Field(default=False)
 
+class BaseCodeRepository(BaseModel):
+    name: str = Field(default="")
+    auth: AuthAgent
+    description: str = Field(default="")
+    gh_remote_url: str = Field(default="")
+    upstream_gh_remote_url: str = Field(default="")
+    associated_code_assistants: set[str] = Field(default=set())
+    private: bool = Field(default=False)
+    
 class AddFunctionModel(BaseFunction):
     namespace_id: str = Field(default="")
 
@@ -170,6 +210,7 @@ class FunctionsAndAgentsMetadata:
         self.agents_collection = None
         self.groups_collection = None
         self.coding_assistants_collection = None
+        self.code_repository_collection = None
         self.db = None
         self.rate_limiter = None
         self.init_lock = Lock()
@@ -192,7 +233,9 @@ class FunctionsAndAgentsMetadata:
                 self.groups_collection = self.db['Groups']
                 await self.groups_collection.create_index([("name", pymongo.ASCENDING), ("namespace_id", pymongo.ASCENDING)], unique=True)
                 self.coding_assistants_collection = self.db['CodingAssistants']
-                await self.coding_assistants_collection.create_index([("gh_remote_url", pymongo.ASCENDING), ("namespace_id", pymongo.ASCENDING)], unique=True)
+                await self.coding_assistants_collection.create_index([("name", pymongo.ASCENDING), ("namespace_id", pymongo.ASCENDING)], unique=True)
+                self.code_repository_collection = self.db['CodeRepository']
+                await self.code_repository_collection.create_index([("name", pymongo.ASCENDING), ("namespace_id", pymongo.ASCENDING)], unique=True)
                 self.rate_limiter = RateLimiter(rate=10, period=1)
                 
             except Exception as e:
@@ -484,15 +527,17 @@ class FunctionsAndAgentsMetadata:
             for coding_assistant_upsert in coding_assistants_upsert:
                 # Check if the assistant exists
                 existing_assistant = await self.coding_assistants_collection.find_one(
-                    {"gh_remote_url": coding_assistant_upsert.gh_remote_url, "namespace_id": coding_assistant_upsert.auth.namespace_id}
+                    {"name": coding_assistant_upsert.name, "namespace_id": coding_assistant_upsert.auth.namespace_id}
                 )
 
                 if not existing_assistant:
                     if existing_assistant.description is None:
                         return json.dumps({"error": "New coding assistant must have a description."})
+                    if existing_assistant.repository_name is None:
+                        return json.dumps({"error": "New coding assistant must have an associated code repository."})
     
                 update_op = pymongo.UpdateOne(
-                    {"gh_remote_url": coding_assistant_upsert.gh_remote_url, "namespace_id": coding_assistant_upsert.auth.namespace_id},
+                    {"name": coding_assistant_upsert.name, "namespace_id": coding_assistant_upsert.auth.namespace_id},
                     {"$set": coding_assistant_upsert.exclude_auth_dict()},
                     upsert=True
                 )
@@ -516,6 +561,47 @@ class FunctionsAndAgentsMetadata:
             logging.warning(f"FunctionsAndAgentsMetadata: upsert_coding_assistants exception {e}\n{traceback.format_exc()}")
             return json.dumps({"error": str(e)})
 
+    async def upsert_code_repository(self, code_repository_upsert: List[UpsertCodeRepositoryInput]) -> str:
+        if self.client is None or self.code_repository_collection is None or self.rate_limiter is None:
+            await self.initialize()
+
+        operations = []
+        try:
+            for code_repo_upsert in code_repository_upsert:
+                # Check if the assistant exists
+                existing_repo = await self.code_repository_collection.find_one(
+                    {"name": code_repo_upsert.name, "namespace_id": code_repo_upsert.auth.namespace_id}
+                )
+
+                if not existing_repo:
+                    if existing_repo.description is None:
+                        return json.dumps({"error": "New code repository must have a description."})
+    
+                update_op = pymongo.UpdateOne(
+                    {"name": code_repo_upsert.name, "namespace_id": code_repo_upsert.auth.namespace_id},
+                    {"$set": code_repo_upsert.exclude_auth_dict()},
+                    upsert=True
+                )
+                operations.append(update_op)
+
+            if operations:
+                result = await self.rate_limiter.execute(
+                    self.code_repository_collection.bulk_write,
+                    operations
+                )
+                # Check if anything was actually modified or upserted
+                if result.modified_count + result.upserted_count == 0:
+                    return json.dumps({"error": "No code repositories were upserted, no changes found!"})
+                return "success"
+            else:
+                return json.dumps({"error": "No code repositories were provided."})
+        except PyMongoError as e:
+            logging.warning(f"FunctionsAndAgentsMetadata: upsert_code_repository exception {e}\n{traceback.format_exc()}")
+            return json.dumps({"error": f"MongoDB error occurred while upsert_code_repository agents: {str(e)}"})
+        except Exception as e:
+            logging.warning(f"FunctionsAndAgentsMetadata: upsert_code_repository exception {e}\n{traceback.format_exc()}")
+            return json.dumps({"error": str(e)})
+        
     async def delete_agents(self, agents_delete: List[DeleteAgentModel]):
         if not agents_delete:
             return json.dumps({"error": "Agent delete list is empty"})
@@ -538,6 +624,72 @@ class FunctionsAndAgentsMetadata:
             logging.warning(f"FunctionsAndAgentsMetadata: delete_agents exception {e}\n{traceback.format_exc()}")
             return json.dumps({"error": str(e)})
 
+    async def delete_code_assistants(self, code_delete: List[DeleteCodeAssistantsModel]):
+        if not code_delete:
+            return json.dumps({"error": "Code assistants delete list is empty"})
+        
+        if self.client is None or self.coding_assistants_collection is None or self.rate_limiter is None:
+            await self.initialize()
+
+        queries = [{"name": obj_delete.name, "namespace_id": obj_delete.auth.namespace_id} for obj_delete in code_delete]
+        try:
+            # Perform the delete operations in batch
+            delete_result = await self.coding_assistants_collection.delete_many({"$or": queries})
+            
+            if delete_result.deleted_count == 0:
+                return json.dumps({"error": "No assistants found or user not authorized to delete."})
+            elif delete_result.deleted_count < len(code_delete):
+                return json.dumps({"error": "Some assistants were not found or user not authorized to delete."})
+            
+            return "success"
+        except Exception as e:
+            logging.warning(f"FunctionsAndAgentsMetadata: delete_code_assistants exception {e}\n{traceback.format_exc()}")
+            return json.dumps({"error": str(e)})
+       
+    async def delete_code_repository(self, code_delete: List[DeleteCodeRepositoryModel]):
+        if not code_delete:
+            return json.dumps({"error": "Code repository delete list is empty"})
+        
+        if self.client is None or self.code_repository_collection is None or self.rate_limiter is None:
+            await self.initialize()
+
+        queries = [{"name": obj_delete.name, "namespace_id": obj_delete.auth.namespace_id} for obj_delete in code_delete]
+        try:
+            # Perform the delete operations in batch
+            delete_result = await self.code_repository_collection.delete_many({"$or": queries})
+            
+            if delete_result.deleted_count == 0:
+                return json.dumps({"error": "No repositories found or user not authorized to delete."})
+            elif delete_result.deleted_count < len(code_delete):
+                return json.dumps({"error": "Some repositories were not found or user not authorized to delete."})
+            
+            return "success"
+        except Exception as e:
+            logging.warning(f"FunctionsAndAgentsMetadata: delete_code_repository exception {e}\n{traceback.format_exc()}")
+            return json.dumps({"error": str(e)})
+       
+    async def delete_groups(self, group_delete: List[DeleteGroupsModel]):
+        if not group_delete:
+            return json.dumps({"error": "Group delete list is empty"})
+        
+        if self.client is None or self.coding_assistants_collection is None or self.rate_limiter is None:
+            await self.initialize()
+
+        queries = [{"name": agent_delete.name, "namespace_id": agent_delete.auth.namespace_id} for agent_delete in code_delete]
+        try:
+            # Perform the delete operations in batch
+            delete_result = await self.coding_assistants_collection.delete_many({"$or": queries})
+            
+            if delete_result.deleted_count == 0:
+                return json.dumps({"error": "No groups found or user not authorized to delete."})
+            elif delete_result.deleted_count < len(group_delete):
+                return json.dumps({"error": "Some groups were not found or user not authorized to delete."})
+            
+            return "success"
+        except Exception as e:
+            logging.warning(f"FunctionsAndAgentsMetadata: delete_groups exception {e}\n{traceback.format_exc()}")
+            return json.dumps({"error": str(e)})
+     
     async def get_groups(self, group_inputs: List[GetGroupModel]) -> Tuple[List[BaseGroup], str]:
         if not group_inputs:
             return [], json.dumps({"error": "Group input list is empty"})
@@ -568,18 +720,40 @@ class FunctionsAndAgentsMetadata:
             await self.initialize()
 
         try:
-            unique_coding_assistants = {(code_input.gh_remote_url, code_input.auth.namespace_id) for code_input in code_inputs}
+            unique_coding_assistants = {(code_input.name, code_input.auth.namespace_id) for code_input in code_inputs}
             names, namespace_ids = zip(*unique_coding_assistants)
-            query = {"gh_remote_url": {"$in": names}, "namespace_id": {"$in": namespace_ids}}
+            query = {"name": {"$in": names}, "namespace_id": {"$in": namespace_ids}}
             doc_cursor = self.coding_assistants_collection.find(query)
             groups_docs = await self.rate_limiter.execute(doc_cursor.to_list, length=None)
             groups = [BaseCodingAssistant(**doc) for doc in groups_docs]
             return groups, None
         except PyMongoError as e:
             logging.warning(f"FunctionsAndGroupsMetadata: get_coding_assistants exception {e}\n{traceback.format_exc()}")
-            return [], json.dumps({"error": f"MongoDB error occurred while retrieving groups: {str(e)}"})
+            return [], json.dumps({"error": f"MongoDB error occurred while retrieving coding assistants: {str(e)}"})
         except Exception as e:
             logging.warning(f"FunctionsAndGroupsMetadata: get_coding_assistants exception {e}\n{traceback.format_exc()}")
+            return [], json.dumps({"error": str(e)})
+
+    async def get_code_repository(self, code_inputs: List[GetCodeRepositoryModel]) -> Tuple[List[BaseCodeRepository], str]:
+        if not code_inputs:
+            return [], json.dumps({"error": "code repository input list is empty"})
+        
+        if self.client is None or self.code_repository_collection is None or self.rate_limiter is None:
+            await self.initialize()
+
+        try:
+            unique_code_repositories = {(code_input.name, code_input.auth.namespace_id) for code_input in code_inputs}
+            names, namespace_ids = zip(*unique_code_repositories)
+            query = {"name": {"$in": names}, "namespace_id": {"$in": namespace_ids}}
+            doc_cursor = self.code_repository_collection.find(query)
+            groups_docs = await self.rate_limiter.execute(doc_cursor.to_list, length=None)
+            groups = [BaseCodeRepository(**doc) for doc in groups_docs]
+            return groups, None
+        except PyMongoError as e:
+            logging.warning(f"FunctionsAndGroupsMetadata: get_code_repository exception {e}\n{traceback.format_exc()}")
+            return [], json.dumps({"error": f"MongoDB error occurred while retrieving code repositories: {str(e)}"})
+        except Exception as e:
+            logging.warning(f"FunctionsAndGroupsMetadata: get_code_repository exception {e}\n{traceback.format_exc()}")
             return [], json.dumps({"error": str(e)})
 
     async def get_agent_groups(self, agent_names: List[str], namespace_id: str) -> Dict[str, List[str]]:

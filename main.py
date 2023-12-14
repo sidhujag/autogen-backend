@@ -9,7 +9,8 @@ from discover_functions_manager import DiscoverFunctionsManager, DiscoverFunctio
 from discover_agents_manager import DiscoverAgentsManager, DiscoverAgentsModel
 from discover_groups_manager import DiscoverGroupsManager, DiscoverGroupsModel
 from discover_coding_assistants_manager import DiscoverCodingAssistantsManager, DiscoverCodingAssistantsModel
-from functions_and_agents_metadata import GetCodingAssistantsModel, UpsertCodingAssistantInput, GetFunctionModel, FunctionsAndAgentsMetadata, GetGroupModel, UpsertGroupInput, UpdateComms, AddFunctionInput, GetAgentModel, DeleteAgentModel, UpsertAgentModel
+from discover_code_repository_manager import DiscoverCodeRepositoryManager, DiscoverCodeRepositoryModel
+from functions_and_agents_metadata import DeleteGroupsModel, DeleteCodeAssistantsModel, GetCodingAssistantsModel, UpsertCodingAssistantInput, DeleteCodeRepositoryModel, GetCodeRepositoryModel, UpsertCodeRepositoryInput, GetFunctionModel, FunctionsAndAgentsMetadata, GetGroupModel, UpsertGroupInput, UpdateComms, AddFunctionInput, GetAgentModel, DeleteAgentModel, UpsertAgentModel
 from rate_limiter import RateLimiter, SyncRateLimiter
 from typing import List
 rate_limiter = RateLimiter(rate=10, period=1)  # Allow 5 tasks per second
@@ -31,6 +32,7 @@ discover_functions_manager = DiscoverFunctionsManager(rate_limiter, rate_limiter
 discover_agents_manager = DiscoverAgentsManager(rate_limiter, rate_limiter_sync)
 discover_groups_manager = DiscoverGroupsManager(rate_limiter, rate_limiter_sync)
 discover_coding_assistants_manager = DiscoverCodingAssistantsManager(rate_limiter, rate_limiter_sync)
+discover_code_repository_manager = DiscoverCodeRepositoryManager(rate_limiter, rate_limiter_sync)
 functions_and_agents_metadata = FunctionsAndAgentsMetadata()
 
 
@@ -264,13 +266,36 @@ async def getCodingAssistants(code_inputs: List[GetCodingAssistantsModel]):
             return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
         if code_input.auth.namespace_id == '':
             return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
-        if code_input.gh_remote_url == '':
-            return {'response': json.dumps({"error": "repository name not provided!"}), 'elapsed_time': 0}
+        if code_input.name == '':
+            return {'response': json.dumps({"error": "Assistant name not provided!"}), 'elapsed_time': 0}
     response, err = await functions_and_agents_metadata.get_coding_assistants(code_inputs)
     if err is not None:
         for group in code_inputs:
             group.auth.namespace_id = ""
         response, err = await functions_and_agents_metadata.get_coding_assistants(code_inputs)
+        if err is not None:
+            response = err
+    end = time.time()
+    return {'response': response, 'elapsed_time': end-start}
+
+@app.post('/get_code_repositories/')
+async def getCodeRepositories(code_inputs: List[GetCodeRepositoryModel]):
+    """Endpoint to get code repository info."""
+    start = time.time()
+    if len(code_inputs) == 0:
+        return {'response': "No code repositories provided", 'elapsed_time': 0}
+    for code_input in code_inputs:
+        if code_input.auth.api_key == '':
+            return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
+        if code_input.auth.namespace_id == '':
+            return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
+        if code_input.name == '':
+            return {'response': json.dumps({"error": "Repository name not provided!"}), 'elapsed_time': 0}
+    response, err = await functions_and_agents_metadata.get_code_repository(code_inputs)
+    if err is not None:
+        for group in code_inputs:
+            group.auth.namespace_id = ""
+        response, err = await functions_and_agents_metadata.get_code_repository(code_inputs)
         if err is not None:
             response = err
     end = time.time()
@@ -286,6 +311,19 @@ async def discoverCodingAssistants(code_input: DiscoverCodingAssistantsModel):
         return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
 
     result = await discover_coding_assistants_manager.pull_coding_assistants(code_input)
+    end = time.time()
+    return {'response': result, 'elapsed_time': end-start}
+
+@app.post('/discover_code_repositories/')
+async def discoverCodeRepositories(code_input: DiscoverCodeRepositoryModel):
+    """Endpoint to discover coding assistants."""
+    start = time.time()
+    if code_input.auth.api_key == '':
+        return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
+    if code_input.auth.namespace_id == '':
+        return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
+
+    result = await discover_code_repository_manager.pull_code_repository(code_input)
     end = time.time()
     return {'response': result, 'elapsed_time': end-start}
 
@@ -360,10 +398,12 @@ async def upsertCodingAssistants(code_inputs: List[UpsertCodingAssistantInput]):
             return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
         if code_input.auth.namespace_id == '':
             return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
-        if code_input.gh_remote_url == '':
-            return {'response': json.dumps({"error": "repository name not provided!"}), 'elapsed_time': 0}
+        if code_input.name == '':
+            return {'response': json.dumps({"error": "Assistant name not provided!"}), 'elapsed_time': 0}
         if code_input.description and code_input.description == '':
             return {'response': json.dumps({"error": "coding assistant description not provided!"}), 'elapsed_time': 0}
+        if code_input.repository_name == '':
+            return {'response': json.dumps({"error": "Repository name not provided!"}), 'elapsed_time': 0}
     # Push the assistant
     response = await functions_and_agents_metadata.upsert_coding_assistants(code_inputs)
     if response != "success":
@@ -373,7 +413,7 @@ async def upsertCodingAssistants(code_inputs: List[UpsertCodingAssistantInput]):
         if not code_input.description:
             continue
         new_group = {
-            'name': code_input.gh_remote_url,
+            'name': code_input.name,
             'description': code_input.description
         }
         assistants.append(new_group)
@@ -383,6 +423,44 @@ async def upsertCodingAssistants(code_inputs: List[UpsertCodingAssistantInput]):
     end = time.time()
     return {'response': response, 'elapsed_time': end-start}
 
+@app.post('/upsert_code_repositories/')
+async def upsertCodeRepositories(code_inputs: List[UpsertCodeRepositoryInput]):
+    """Endpoint to upsert coding repositories."""
+    if len(code_inputs) == 0:
+        return {'response': "No code repositories provided", 'elapsed_time': 0}
+    start = time.time()
+    assistants = []
+    for code_input in code_inputs:
+        if code_input.auth.api_key == '':
+            return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
+        if code_input.auth.namespace_id == '':
+            return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
+        if code_input.description and code_input.description == '':
+            return {'response': json.dumps({"error": "coding repository description not provided!"}), 'elapsed_time': 0}
+        if code_input.gh_remote_url and code_input.gh_remote_url == '':
+            return {'response': json.dumps({"error": "gh_remote_url not provided!"}), 'elapsed_time': 0}
+        if code_input.upstream_gh_remote_url and code_input.upstream_gh_remote_url == '':
+            return {'response': json.dumps({"error": "upstream_gh_remote_url not provided!"}), 'elapsed_time': 0}
+        if code_input.name == '':
+            return {'response': json.dumps({"error": "Repository name not provided!"}), 'elapsed_time': 0}
+    # Push the repo
+    response = await functions_and_agents_metadata.upsert_code_repository(code_inputs)
+    if response != "success":
+        end = time.time()
+        return {'response': response, 'elapsed_time': end-start}
+    for code_input in code_inputs:
+        if not code_input.description:
+            continue
+        new_group = {
+            'name': code_input.name,
+            'description': code_input.description
+        }
+        assistants.append(new_group)
+    
+    if len(assistants) > 0:
+        response = await discover_code_repository_manager.push_code_repository(code_inputs[0].auth, assistants)
+    end = time.time()
+    return {'response': response, 'elapsed_time': end-start}
 
 @app.post('/delete_agents/')
 async def deleteAgent(agent_inputs: List[DeleteAgentModel]):
@@ -401,5 +479,65 @@ async def deleteAgent(agent_inputs: List[DeleteAgentModel]):
         end = time.time()
         return {'response': response, 'elapsed_time': end-start}
     result = discover_agents_manager.delete_agents(agent_inputs)
+    end = time.time()
+    return {'response': result, 'elapsed_time': end-start}
+
+@app.post('/delete_code_assistants/')
+async def deleteCodeAssistants(code_inputs: List[DeleteCodeAssistantsModel]):
+    """Endpoint to delete assistants."""
+    start = time.time()
+    for agent_input in code_inputs:
+        if agent_input.auth.api_key == '':
+            return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
+        if agent_input.auth.namespace_id == '':
+            return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
+        if agent_input.name == '':
+            return {'response': json.dumps({"error": "Assistant name not provided!"}), 'elapsed_time': 0}
+    # delete the assistant
+    response = await functions_and_agents_metadata.delete_code_assistants(code_inputs)
+    if response != "success":
+        end = time.time()
+        return {'response': response, 'elapsed_time': end-start}
+    result = discover_coding_assistants_manager.delete_coding_assistants(code_inputs)
+    end = time.time()
+    return {'response': result, 'elapsed_time': end-start}
+
+@app.post('/delete_code_repositories/')
+async def deleteCodeRepostories(code_inputs: List[DeleteCodeRepositoryModel]):
+    """Endpoint to delete repos."""
+    start = time.time()
+    for agent_input in code_inputs:
+        if agent_input.auth.api_key == '':
+            return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
+        if agent_input.auth.namespace_id == '':
+            return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
+        if agent_input.name == '':
+            return {'response': json.dumps({"error": "Repository name not provided!"}), 'elapsed_time': 0}
+    # delete the repo
+    response = await functions_and_agents_metadata.delete_code_repository(code_inputs)
+    if response != "success":
+        end = time.time()
+        return {'response': response, 'elapsed_time': end-start}
+    result = discover_code_repository_manager.delete_code_repository(code_inputs)
+    end = time.time()
+    return {'response': result, 'elapsed_time': end-start}
+
+@app.post('/delete_groups/')
+async def deleteGroups(group_inputs: List[DeleteGroupsModel]):
+    """Endpoint to delete groups."""
+    start = time.time()
+    for agent_input in group_inputs:
+        if agent_input.auth.api_key == '':
+            return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
+        if agent_input.auth.namespace_id == '':
+            return {'response': json.dumps({"error": "namespace_id not provided"}), 'elapsed_time': 0}
+        if agent_input.name == '':
+            return {'response': json.dumps({"error": "Group name not provided!"}), 'elapsed_time': 0}
+    # delete the group
+    response = await functions_and_agents_metadata.delete_groups(group_inputs)
+    if response != "success":
+        end = time.time()
+        return {'response': response, 'elapsed_time': end-start}
+    result = discover_groups_manager.delete_groups(group_inputs)
     end = time.time()
     return {'response': result, 'elapsed_time': end-start}
