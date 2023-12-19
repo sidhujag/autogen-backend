@@ -13,11 +13,20 @@ from pydantic import BaseModel, Field
 from rate_limiter import RateLimiter
 from asyncio import Lock
 from typing import List, Optional, Any, Tuple, Dict
+
 class AuthAgent(BaseModel):
-    api_key: str
-    namespace_id: str
+    api_key: str = ''
+    zapier_api_key: str = ''
+    gh_pat: str = ''
+    gh_user: str = ''
+    namespace_id: str = ''
     def to_dict(self):
         return {"namespace_id": self.namespace_id}
+
+    def __init__(self, namespace_id: str, **data):
+        if 'api_key' not in data:
+            data['api_key'] = ''
+        super().__init__(namespace_id=namespace_id, **data)
 
 class DeleteAgentModel(BaseModel):
     name: str
@@ -131,7 +140,13 @@ class BaseAgent(BaseModel):
     capability: int = Field(default=0)
     files: Dict[str, str] = Field(default_factory=dict)
     function_names: List[str] = Field(default_factory=list)
-
+    def __init__(self, **data):
+        if 'auth' not in data and 'namespace_id' in data:
+            data['auth'] = {'namespace_id': data['namespace_id']}
+        elif 'auth' in data and isinstance(data['auth'], dict) and 'namespace_id' in data:
+            data['auth']['namespace_id'] = data['namespace_id']
+        super().__init__(**data)
+        
 class BaseGroup(BaseModel):
     name: str = Field(default="")
     auth: AuthAgent
@@ -140,7 +155,13 @@ class BaseGroup(BaseModel):
     outgoing: Dict[str, int] = Field(default_factory=dict)
     incoming: Dict[str, int] = Field(default_factory=dict)
     locked: Optional[bool] = Field(default=False)
-    
+    def __init__(self, **data):
+        if 'auth' not in data and 'namespace_id' in data:
+            data['auth'] = {'namespace_id': data['namespace_id']}
+        elif 'auth' in data and isinstance(data['auth'], dict) and 'namespace_id' in data:
+            data['auth']['namespace_id'] = data['namespace_id']
+        super().__init__(**data)
+        
 class OpenAIParameter(BaseModel):
     type: str = "object"
     properties: dict = Field(default_factory=dict)
@@ -167,6 +188,12 @@ class BaseCodingAssistant(BaseModel):
     dry_run: bool = Field(default=False)
     map_tokens: int = Field(default=1024)
     verbose: bool = Field(default=False)
+    def __init__(self, **data): 
+        if 'auth' not in data and 'namespace_id' in data:
+            data['auth'] = {'namespace_id': data['namespace_id']}
+        elif 'auth' in data and isinstance(data['auth'], dict) and 'namespace_id' in data:
+            data['auth']['namespace_id'] = data['namespace_id']
+        super().__init__(**data)
 
 class BaseCodeRepository(BaseModel):
     name: str = Field(default="")
@@ -176,7 +203,13 @@ class BaseCodeRepository(BaseModel):
     upstream_gh_remote_url: str = Field(default="")
     associated_code_assistants: set[str] = Field(default=set())
     private: bool = Field(default=False)
-    
+    def __init__(self, **data): 
+        if 'auth' not in data and 'namespace_id' in data:
+            data['auth'] = {'namespace_id': data['namespace_id']}
+        elif 'auth' in data and isinstance(data['auth'], dict) and 'namespace_id' in data:
+            data['auth']['namespace_id'] = data['namespace_id']
+        super().__init__(**data)
+        
 class AddFunctionModel(BaseFunction):
     namespace_id: str = Field(default="")
 

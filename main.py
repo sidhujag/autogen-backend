@@ -478,7 +478,8 @@ async def deleteAgent(agent_inputs: List[DeleteAgentModel]):
     if response != "success":
         end = time.time()
         return {'response': response, 'elapsed_time': end-start}
-    result = discover_agents_manager.delete_agents(agent_inputs)
+    agent_names = [agent_input.name for agent_input in agent_inputs]
+    result = discover_agents_manager.delete_agents(agent_input.auth, agent_names)
     end = time.time()
     return {'response': result, 'elapsed_time': end-start}
 
@@ -498,7 +499,8 @@ async def deleteCodeAssistants(code_inputs: List[DeleteCodeAssistantsModel]):
     if response != "success":
         end = time.time()
         return {'response': response, 'elapsed_time': end-start}
-    result = discover_coding_assistants_manager.delete_coding_assistants(code_inputs)
+    assistant_names = [code_input.name for code_input in code_inputs]
+    result = discover_coding_assistants_manager.delete_coding_assistants(code_inputs[0].auth, assistant_names)
     end = time.time()
     return {'response': result, 'elapsed_time': end-start}
 
@@ -518,7 +520,8 @@ async def deleteCodeRepostories(code_inputs: List[DeleteCodeRepositoryModel]):
     if response != "success":
         end = time.time()
         return {'response': response, 'elapsed_time': end-start}
-    result = discover_code_repository_manager.delete_code_repository(code_inputs)
+    repo_names = [code_input.name for code_input in code_inputs]
+    result = discover_code_repository_manager.delete_code_repository(code_inputs[0].auth, repo_names)
     end = time.time()
     return {'response': result, 'elapsed_time': end-start}
 
@@ -538,6 +541,7 @@ async def deleteGroups(group_inputs: List[DeleteGroupsModel]):
     if response != "success":
         end = time.time()
         return {'response': response, 'elapsed_time': end-start}
-    result = discover_groups_manager.delete_groups(group_inputs)
+    group_names = [group_input.name for group_input in group_inputs]
+    result = discover_groups_manager.delete_groups(group_inputs[0].auth, group_names)
     end = time.time()
     return {'response': result, 'elapsed_time': end-start}
