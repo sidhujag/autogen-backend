@@ -118,7 +118,7 @@ class UpsertCodeRepositoryInput(BaseModel):
     private: Optional[bool] = None
     gh_remote_url: Optional[str] = None
     upstream_gh_remote_url: Optional[str] = None
-    associated_code_assistants: Optional[set[str]] = None
+    associated_code_assistants: Optional[List[str]] = None
     def exclude_auth_dict(self):
         data = self.dict(exclude={"auth"}, exclude_none=True)
         data.update(self.auth.to_dict())
@@ -201,7 +201,7 @@ class BaseCodeRepository(BaseModel):
     description: str = Field(default="")
     gh_remote_url: str = Field(default="")
     upstream_gh_remote_url: str = Field(default="")
-    associated_code_assistants: set[str] = Field(default=set())
+    associated_code_assistants: List[str] = Field(default=[])
     private: bool = Field(default=False)
     def __init__(self, **data): 
         if 'auth' not in data and 'namespace_id' in data:
@@ -385,16 +385,17 @@ class FunctionsAndAgentsMetadata:
                 existing_function = await self.funcs_collection.find_one(
                     {"name": function.name, "namespace_id": function.auth.namespace_id}
                 )
-                if not existing_function and function.category is None:
-                    return json.dumps({"error": "New functions must have a category defined."})
-                if not existing_function and function.status is None:
-                    return json.dumps({"error": "New functions must have a status defined."})
-                if not existing_function and function.status == "accepted" and function.function_code:
-                    return json.dumps({"error": "New untested functions cannot have an accepted status."})
-                if not existing_function and function.description is None:
-                    return json.dumps({"error": "New functions must have a description defined."})
-                if not existing_function and function.class_name is None and function.function_code is None:
-                    return json.dumps({"error": "New functions must have either function_code or class_name defined."})
+                if not existing_function:
+                    if function.category is None:
+                        return json.dumps({"error": "New functions must have a category defined."})
+                    if function.status is None:
+                        return json.dumps({"error": "New functions must have a status defined."})
+                    if function.status == "accepted" and function.function_code:
+                        return json.dumps({"error": "New untested functions cannot have an accepted status."})
+                    if function.description is None:
+                        return json.dumps({"error": "New functions must have a description defined."})
+                    if function.class_name is None and function.function_code is None:
+                        return json.dumps({"error": "New functions must have either function_code or class_name defined."})
                 if existing_function and function.function_code:
                     existing_function_model = AddFunctionModel(**existing_function)
                     # if status is changing to accepted make sure this updater is not the same as the last one
@@ -442,8 +443,9 @@ class FunctionsAndAgentsMetadata:
                 )
 
                 # If it's a new agent and no category is provided, fail the operation
-                if not existing_agent and agent_upsert.category is None:
-                    return json.dumps({"error": "New agents must have a category defined."})
+                if not existing_agent:
+                    if agent_upsert.category is None:
+                        return json.dumps({"error": "New agents must have a category defined."})
                 if agent_upsert.functions_to_add:
                     if not await self.do_functions_exist(agent_upsert.auth.namespace_id, agent_upsert.functions_to_add):
                         liststr = ", ".join(agent_upsert.functions_to_add)
@@ -564,9 +566,9 @@ class FunctionsAndAgentsMetadata:
                 )
 
                 if not existing_assistant:
-                    if existing_assistant.description is None:
+                    if coding_assistant_upsert.description is None:
                         return json.dumps({"error": "New coding assistant must have a description."})
-                    if existing_assistant.repository_name is None:
+                    if coding_assistant_upsert.repository_name is None:
                         return json.dumps({"error": "New coding assistant must have an associated code repository."})
     
                 update_op = pymongo.UpdateOne(
@@ -607,7 +609,7 @@ class FunctionsAndAgentsMetadata:
                 )
 
                 if not existing_repo:
-                    if existing_repo.description is None:
+                    if code_repo_upsert.description is None:
                         return json.dumps({"error": "New code repository must have a description."})
     
                 update_op = pymongo.UpdateOne(
