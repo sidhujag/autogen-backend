@@ -4,6 +4,7 @@ import os
 import traceback
 import pymongo
 import json
+import metagpt
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.server_api import ServerApi
@@ -64,6 +65,27 @@ class GetCodeRepositoryModel(BaseModel):
     name: str
     auth: AuthAgent
     
+class WebResearchInput(BaseModel):
+    topic: str
+
+class CodeExecInput(BaseModel):
+    workspace: str
+    command_git_command: str
+
+class CodeRequestInput(BaseModel):
+    auth: AuthAgent
+    repository_name: str
+    title: str
+    body: str
+    branch: str
+ 
+class CodeAssistantInput(BaseModel):
+    auth: AuthAgent
+    workspace: str
+    project_name: str
+    command_message: str
+    reqa_file: Optional[str] = None
+
 class UpsertAgentModel(BaseModel):
     name: str
     auth: AuthAgent
@@ -117,8 +139,9 @@ class UpsertCodeRepositoryInput(BaseModel):
     description: Optional[str] = None
     private: Optional[bool] = None
     gh_remote_url: Optional[str] = None
-    upstream_gh_remote_url: Optional[str] = None
+    is_forked: Optional[bool] = None
     associated_code_assistants: Optional[List[str]] = None
+    workspace: Optional[str] = None
     def exclude_auth_dict(self):
         data = self.dict(exclude={"auth"}, exclude_none=True)
         data.update(self.auth.to_dict())
@@ -200,9 +223,9 @@ class BaseCodeRepository(BaseModel):
     auth: AuthAgent
     description: str = Field(default="")
     gh_remote_url: str = Field(default="")
-    upstream_gh_remote_url: str = Field(default="")
     associated_code_assistants: List[str] = Field(default=[])
     private: bool = Field(default=False)
+    workspace: str = Field(default="")
     def __init__(self, **data): 
         if 'auth' not in data and 'namespace_id' in data:
             data['auth'] = {'namespace_id': data['namespace_id']}
@@ -611,7 +634,7 @@ class FunctionsAndAgentsMetadata:
                 if not existing_repo:
                     if code_repo_upsert.description is None:
                         return json.dumps({"error": "New code repository must have a description."})
-    
+
                 update_op = pymongo.UpdateOne(
                     {"name": code_repo_upsert.name, "namespace_id": code_repo_upsert.auth.namespace_id},
                     {"$set": code_repo_upsert.exclude_auth_dict()},

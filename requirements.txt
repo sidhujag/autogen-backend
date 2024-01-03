@@ -1,8 +1,6 @@
 cohere
 langchain
-openai
 pandas
-gitpython
 lark
 cython
 tiktoken
@@ -23,3 +21,5 @@ pymongo
 pytest
 pytest-asyncio
 motor
+metagpt @ git+https://github.com/geekan/MetaGPT@main
+openai>=1.6.0

@@ -8,11 +8,16 @@ from fastapi import FastAPI
 from discover_functions_manager import DiscoverFunctionsManager, DiscoverFunctionsModel
 from discover_agents_manager import DiscoverAgentsManager, DiscoverAgentsModel
 from discover_groups_manager import DiscoverGroupsManager, DiscoverGroupsModel
+from repository_service import RepositoryService
+from metagpt_service import MetaGPTService
 from discover_coding_assistants_manager import DiscoverCodingAssistantsManager, DiscoverCodingAssistantsModel
 from discover_code_repository_manager import DiscoverCodeRepositoryManager, DiscoverCodeRepositoryModel
-from functions_and_agents_metadata import DeleteGroupsModel, DeleteCodeAssistantsModel, GetCodingAssistantsModel, UpsertCodingAssistantInput, DeleteCodeRepositoryModel, GetCodeRepositoryModel, UpsertCodeRepositoryInput, GetFunctionModel, FunctionsAndAgentsMetadata, GetGroupModel, UpsertGroupInput, UpdateComms, AddFunctionInput, GetAgentModel, DeleteAgentModel, UpsertAgentModel
+from functions_and_agents_metadata import CodeExecInput, WebResearchInput, CodeAssistantInput, CodeRequestInput, DeleteGroupsModel, DeleteCodeAssistantsModel, GetCodingAssistantsModel, UpsertCodingAssistantInput, DeleteCodeRepositoryModel, GetCodeRepositoryModel, UpsertCodeRepositoryInput, GetFunctionModel, FunctionsAndAgentsMetadata, GetGroupModel, UpsertGroupInput, UpdateComms, AddFunctionInput, GetAgentModel, DeleteAgentModel, UpsertAgentModel
 from rate_limiter import RateLimiter, SyncRateLimiter
 from typing import List
+from metagpt.const import DEFAULT_WORKSPACE_ROOT
+from metagpt.utils.git_repository import GitRepository
+
 rate_limiter = RateLimiter(rate=10, period=1)  # Allow 5 tasks per second
 rate_limiter_sync = SyncRateLimiter(rate=10, period=1)
 # Load environment variables
@@ -164,7 +169,6 @@ async def upsertAgents(agent_inputs: List[UpsertAgentModel]):
             agents[agent_input.category].append(new_agent)
         else:
             agents[agent_input.category] = [new_agent]
-    
     if len(agents) > 0:
         response = await discover_agents_manager.push_agents(agent_inputs[0].auth, agents)
     end = time.time()
@@ -431,6 +435,10 @@ async def upsertCodeRepositories(code_inputs: List[UpsertCodeRepositoryInput]):
     start = time.time()
     assistants = []
     for code_input in code_inputs:
+        if code_input.auth.gh_pat == '':
+            return {'response': json.dumps({"error": "Github PAT not provided"}), 'elapsed_time': 0}
+        if code_input.auth.gh_user == '':
+            return {'response': json.dumps({"error": "Github User not provided"}), 'elapsed_time': 0}
         if code_input.auth.api_key == '':
             return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
         if code_input.auth.namespace_id == '':
@@ -439,15 +447,28 @@ async def upsertCodeRepositories(code_inputs: List[UpsertCodeRepositoryInput]):
             return {'response': json.dumps({"error": "coding repository description not provided!"}), 'elapsed_time': 0}
         if code_input.gh_remote_url and code_input.gh_remote_url == '':
             return {'response': json.dumps({"error": "gh_remote_url not provided!"}), 'elapsed_time': 0}
-        if code_input.upstream_gh_remote_url and code_input.upstream_gh_remote_url == '':
-            return {'response': json.dumps({"error": "upstream_gh_remote_url not provided!"}), 'elapsed_time': 0}
         if code_input.name == '':
             return {'response': json.dumps({"error": "Repository name not provided!"}), 'elapsed_time': 0}
+        code_input.workspace = DEFAULT_WORKSPACE_ROOT / code_input.name
+        code_input.workspace.mkdir(parents=True, exist_ok=True)
+
+        working_gh_remote_url_response = RepositoryService.create_github_remote_repo(code_input.auth, code_input.name, code_input.description, code_input.private, code_input.gh_remote_url)
+        if 'error' in working_gh_remote_url_response:
+            return {'response': json.dumps(working_gh_remote_url_response), 'elapsed_time': 0}
+        working_gh_remote_url = working_gh_remote_url_response
+        code_input.is_forked = code_input.gh_remote_url and working_gh_remote_url != code_input.gh_remote_url
+        code_input.gh_remote_url = working_gh_remote_url
+
+        clone_response = RepositoryService.clone_repo(code_input.auth, code_input.gh_remote_url, code_input.workspace)
+        if 'error' in clone_response:
+            return {'response': json.dumps(clone_response), 'elapsed_time': 0}
+    
     # Push the repo
     response = await functions_and_agents_metadata.upsert_code_repository(code_inputs)
     if response != "success":
         end = time.time()
         return {'response': response, 'elapsed_time': end-start}
+        
     for code_input in code_inputs:
         if not code_input.description:
             continue
@@ -545,3 +566,73 @@ async def deleteGroups(group_inputs: List[DeleteGroupsModel]):
     result = discover_groups_manager.delete_groups(group_inputs[0].auth, group_names)
     end = time.time()
     return {'response': result, 'elapsed_time': end-start}
+
+
+@app.post('/code_issue_pull_request/')
+async def codePullRequest(code_input: CodeRequestInput):
+    """Endpoint to issue PR."""
+    start = time.time()
+    if code_input.auth.gh_pat == '':
+        return {'response': json.dumps({"error": "Github PAT not provided"}), 'elapsed_time': 0}
+    if code_input.auth.gh_user == '':
+        return {'response': json.dumps({"error": "Github User not provided"}), 'elapsed_time': 0}
+    if code_input.title == '':
+        return {'response': json.dumps({"error": "Pull request title cannot be empty!"}), 'elapsed_time': 0}
+    if code_input.body == '':
+        return {'response': json.dumps({"error": "Pull request body cannot be empty!"}), 'elapsed_time': 0}
+    if code_input.branch == '':
+        return {'response': json.dumps({"error": "Pull request active branch cannot be empty!"}), 'elapsed_time': 0}
+    if code_input.repository_name == '':
+        return {'response': json.dumps({"error": "Repository name not provided!"}), 'elapsed_time': 0}
+    response = RepositoryService.create_github_pull_request(code_input.auth, code_input.repository_name, code_input.title,  code_input.body,  code_input.branch)
+    if 'error' in response:
+        return {'response': json.dumps(response), 'elapsed_time': 0}
+    end = time.time()
+    return {'response': response, 'elapsed_time': end-start}
+
+@app.post('/code_assistant_run/')
+async def codeAssistantRun(code_input: CodeAssistantInput):
+    """Endpoint to run code assistant."""
+    start = time.time()
+    if code_input.auth.api_key == '':
+        return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
+    if code_input.auth.gh_pat == '':
+        return {'response': json.dumps({"error": "Github PAT not provided"}), 'elapsed_time': 0}
+    if code_input.auth.gh_user == '':
+        return {'response': json.dumps({"error": "Github User not provided"}), 'elapsed_time': 0}
+    if code_input.reqa_file and code_input.reqa_file == '':
+        return {'response': json.dumps({"error": "reqa_file was empty"}), 'elapsed_time': 0}
+    if code_input.name == '':
+        return {'response': json.dumps({"error": "Code assistant name not provided!"}), 'elapsed_time': 0}
+    response = await MetaGPTService.run(code_input.auth, code_input.workspace, code_input.project_name, code_input.reqa_file, code_input.command_message)
+    if 'error' in response:
+        return {'response': json.dumps(response), 'elapsed_time': 0}
+    end = time.time()
+    return {'response': response, 'elapsed_time': end-start}
+
+@app.post('/web_research/')
+async def webResearch(code_input: WebResearchInput):
+    """Endpoint to run code assistant."""
+    start = time.time()
+    if code_input.topic == '':
+        return {'response': json.dumps({"error": "Topic was not provided!"}), 'elapsed_time': 0}
+    response = await MetaGPTService.web_research(code_input.topic)
+    if 'error' in response:
+        return {'response': json.dumps(response), 'elapsed_time': 0}
+    end = time.time()
+    return {'response': response, 'elapsed_time': end-start}
+
+@app.post('/code_execute_git_command/')
+async def execGitCommand(code_input: CodeExecInput):
+    """Endpoint to run git cmd."""
+    start = time.time()
+    if code_input.workspace == '':
+        return {'response': json.dumps({"error": "workspace not provided!"}), 'elapsed_time': 0}
+    if code_input.command_git_command == '':
+        return {'response': json.dumps({"error": "command_git_command not provided!"}), 'elapsed_time': 0}
+    repo = GitRepository(local_path=code_input.workspace, auto_init=False)
+    response = await RepositoryService.execute_git_command(repo, code_input.command_git_command)
+    if 'error' in response:
+        return {'response': json.dumps(response), 'elapsed_time': 0}
+    end = time.time()
+    return {'response': response, 'elapsed_time': end-start}
