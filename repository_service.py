@@ -258,7 +258,7 @@ class RepositoryService:
             repo = git.Repo.clone_from(repo_url, workspace)
             gitignore_filename = workspace / ".gitignore"
             if not gitignore_filename.exists():
-                ignores = ["__pycache__", "*.pyc"]
+                ignores = ["__pycache__", ".*", "*.pyc"]
                 with open(str(gitignore_filename), mode="w") as writer:
                     writer.write("\n".join(ignores))
                 repo.index.add([".gitignore"])
