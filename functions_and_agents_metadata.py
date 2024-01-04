@@ -4,7 +4,6 @@ import os
 import traceback
 import pymongo
 import json
-import metagpt
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.server_api import ServerApi
@@ -630,7 +629,6 @@ class FunctionsAndAgentsMetadata:
                 existing_repo = await self.code_repository_collection.find_one(
                     {"name": code_repo_upsert.name, "namespace_id": code_repo_upsert.auth.namespace_id}
                 )
-
                 if not existing_repo:
                     if code_repo_upsert.description is None:
                         return json.dumps({"error": "New code repository must have a description."})

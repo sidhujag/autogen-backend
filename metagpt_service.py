@@ -44,20 +44,25 @@ class MetaGPTService:
         # Update the SERDESER_PATH in the metagpt.const module
         metagpt_const.SERDESER_PATH = workspace / "storage"
 
-        company = MetaGPTService.get_or_create_company(workspace)
-        if not company:
-            return {"error": f"MetaGPT coding assistant object not found: {project_name}"}
-        
         # Other logic
         CONFIG.update_via_cli(workspace, project_name, inc, reqa_file, max_auto_summarize_code)
         CONFIG.openai_api_key = auth.api_key
         CONFIG.serpapi_api_key = serpkey
+        
+        company = MetaGPTService.get_or_create_company(workspace)
+        if not company:
+            return {"error": f"MetaGPT coding assistant object not found: {project_name}"}
+        
         company.run_project(command_message)
         await company.run()
 
-        # Read history from the updated SERDESER_PATH
-        history = read_json_file(metagpt_const.SERDESER_PATH.joinpath("history.json"))
-        str_output = history.get("content")[:1024]
+        history_file = metagpt_const.SERDESER_PATH / "team" / "environment" / "history.json"
+        if Path(history_file).exists():
+            history = read_json_file()
+            content = history.get("content", "")
+            str_output = content[-1024:] if len(content) > 1024 else content
+        else:
+            str_output = "no history found"
         return str_output
     
     @staticmethod 

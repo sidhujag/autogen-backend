@@ -1,8 +1,12 @@
 import requests
+import git
+import shutil
+import logging
 
 from functions_and_agents_metadata import AuthAgent
 from pathlib import Path
-from metagpt.utils.git_repository import GitRepository
+from urllib.parse import urlparse, urlunparse
+
 class RepositoryService:
     @staticmethod
     def _create_github_repository(token: str, name: str, description: str="", private: bool =False):
@@ -200,42 +204,84 @@ class RepositoryService:
     @staticmethod
     def clone_repo(auth: AuthAgent, gh_remote_url: str, workspace: Path):
         # Clone the repository if it's not already cloned
-        repo = GitRepository(local_path=workspace, auto_init=False)
-        is_cloned = RepositoryService._is_repo_cloned(repo, gh_remote_url)
-        print(f'clone_repo repo {repo} is_cloned {is_cloned}')
-        if not is_cloned:
-            clone_response = RepositoryService._clone_repository(repo, gh_remote_url, workspace)
+        if RepositoryService._get_username_from_repo_url(gh_remote_url) != auth.gh_user:
+            return {"error": f"gh_remote_url ({gh_remote_url}) blongs to another user, not the one you used: {auth.gh_user}"}
+        if workspace.is_dir() and not any(workspace.iterdir()):
+            shutil.rmtree(workspace)
+        elif workspace.is_file():
+            workspace.unlink()
+        if not workspace.exists():
+            repo, clone_response = RepositoryService._clone_repository(gh_remote_url, workspace)
             if 'error' in clone_response:
+                if workspace.is_dir():
+                    shutil.rmtree(workspace)
                 return clone_response
-            print('_clone_repository done')
             is_cloned = RepositoryService._is_repo_cloned(repo, gh_remote_url)
             if not is_cloned:
-                return {"error": f"Repository({gh_remote_url}) was not cloned."}
-            print('_is_repo_cloned done')
+                if workspace.is_dir():
+                    shutil.rmtree(workspace)
+                return RepositoryService.clone_repo(auth, gh_remote_url, workspace)
             # Set remote URL with PAT for authentication
             remote_auth_url = RepositoryService._construct_github_remote_url_with_pat(auth.gh_user, auth.gh_pat, gh_remote_url)
             if 'error' in remote_auth_url:
-                return remote_auth_url
-            print('_construct_github_remote_url_with_pat done')
+                if workspace.is_dir():
+                    shutil.rmtree(workspace)
+                return RepositoryService.clone_repo(auth, gh_remote_url, workspace)
+            # set the auth so you can push
             set_remote_response = RepositoryService.execute_git_command(repo, f"remote set-url origin {remote_auth_url}")
             if 'error' in set_remote_response:
-                return set_remote_response
-            print('success')
+                if workspace.is_dir():
+                    shutil.rmtree(workspace)
+                return RepositoryService.clone_repo(auth, gh_remote_url, workspace)
             return {"response": f"Repository was successfully cloned + authorized using a Personal Access Token to remote: {gh_remote_url}."}
         else:
-            print('already cloned')
+            try:
+                repo = git.Repo(workspace, search_parent_directories=False)
+            except Exception as e:
+                if workspace.is_dir():
+                    shutil.rmtree(workspace)
+                return RepositoryService.clone_repo(auth, gh_remote_url, workspace)
+            if not repo.remotes:
+                if workspace.is_dir():
+                    shutil.rmtree(workspace)
+                return RepositoryService.clone_repo(auth, gh_remote_url, workspace)
+            is_cloned = RepositoryService._is_repo_cloned(repo, gh_remote_url)
+            if not is_cloned:
+                if workspace.is_dir():
+                    shutil.rmtree(workspace)
+                return RepositoryService.clone_repo(auth, gh_remote_url, workspace)
             return {"response": "The repository was already cloned."}
 
     @staticmethod
-    def _clone_repository(git_repo: GitRepository, repo_url: str, workspace: Path):
+    def _clone_repository(repo_url: str, workspace: Path):
         try:
-            git_repo._repository.clone_from(repo_url, workspace)
-            return {"response": f"Repository cloned successfully to {workspace}"}
+            repo = git.Repo.clone_from(repo_url, workspace)
+            gitignore_filename = workspace / ".gitignore"
+            if not gitignore_filename.exists():
+                ignores = ["__pycache__", "*.pyc"]
+                with open(str(gitignore_filename), mode="w") as writer:
+                    writer.write("\n".join(ignores))
+                repo.index.add([".gitignore"])
+                repo.index.commit("Add .gitignore")
+            return repo, {"response": f"Repository cloned successfully to {workspace}"}
         except Exception as e:
-            return {"error": f"Error cloning repository: {e}"}
+            logging.error(f"Error during cloning: {e}")
+            return None, {"error": f"Error cloning repository: {e}"}
             
     @staticmethod
-    def _is_repo_cloned(git_repo: GitRepository, remote_url: str):
+    def _remove_auth_from_url(url: str) -> str:
+        """
+        Remove the authentication part from the URL.
+
+        :param url: URL to process
+        :return: URL without the authentication part
+        """
+        parsed_url = urlparse(url)
+        # Reconstruct the URL without the username and password
+        return urlunparse((parsed_url.scheme, parsed_url.hostname, parsed_url.path, '', '', ''))
+
+    @staticmethod
+    def _is_repo_cloned(repo: git.Repo, remote_url: str) -> bool:
         """
         Check if the GitPython Repo object is associated with the given remote URL.
 
@@ -243,12 +289,14 @@ class RepositoryService:
         :param remote_url: URL of the remote repository to check
         :return: True if the Repo is cloned from the remote URL, False otherwise
         """
-        if not remote_url or not git_repo._repository:
+        if not remote_url or not repo:
             return False
+
         try:
-            for remote in git_repo._repository.remotes:
+            for remote in repo.remotes:
                 for url in remote.urls:
-                    if url == remote_url:
+                    clean_url = RepositoryService._remove_auth_from_url(url)
+                    if clean_url == remote_url:
                         return True
             return False
         except Exception as e:
@@ -274,11 +322,17 @@ class RepositoryService:
         return new_url
     
     @staticmethod
-    def execute_git_command(git_repo: GitRepository, git_command: str):
+    def execute_git_command(repo: git.Repo, git_command: str):
         try:
-            if not git_repo._repository:
-                return {"error": "No repository found to execute command against"}
-            result = git_repo._repository.git.execute(git_command.split())
+            # Split the command string into parts
+            command_parts = git_command.split()
+
+            # Prepend "git" if it's not the first part of the command
+            if command_parts[0] != 'git':
+                command_parts.insert(0, 'git')
+
+            # Execute the git command
+            result = repo.git.execute(command_parts)
             return {"response": f"Git command executed successfully: {result}"}
         except Exception as e:
             return {"error": f"Error executing Git command: {e}"}

@@ -2,6 +2,7 @@ import os
 import logging
 import time
 import json
+import git
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -16,7 +17,7 @@ from functions_and_agents_metadata import CodeExecInput, WebResearchInput, CodeA
 from rate_limiter import RateLimiter, SyncRateLimiter
 from typing import List
 from metagpt.const import DEFAULT_WORKSPACE_ROOT
-from metagpt.utils.git_repository import GitRepository
+from pathlib import Path
 
 rate_limiter = RateLimiter(rate=10, period=1)  # Allow 5 tasks per second
 rate_limiter_sync = SyncRateLimiter(rate=10, period=1)
@@ -449,20 +450,19 @@ async def upsertCodeRepositories(code_inputs: List[UpsertCodeRepositoryInput]):
             return {'response': json.dumps({"error": "gh_remote_url not provided!"}), 'elapsed_time': 0}
         if code_input.name == '':
             return {'response': json.dumps({"error": "Repository name not provided!"}), 'elapsed_time': 0}
-        code_input.workspace = DEFAULT_WORKSPACE_ROOT / code_input.name
-        code_input.workspace.mkdir(parents=True, exist_ok=True)
-
+        user_workspace = DEFAULT_WORKSPACE_ROOT / code_input.auth.gh_user
+        user_workspace.mkdir(parents=True, exist_ok=True)
+        code_input.workspace = user_workspace / code_input.name
         working_gh_remote_url_response = RepositoryService.create_github_remote_repo(code_input.auth, code_input.name, code_input.description, code_input.private, code_input.gh_remote_url)
         if 'error' in working_gh_remote_url_response:
             return {'response': json.dumps(working_gh_remote_url_response), 'elapsed_time': 0}
         working_gh_remote_url = working_gh_remote_url_response
         code_input.is_forked = code_input.gh_remote_url and working_gh_remote_url != code_input.gh_remote_url
         code_input.gh_remote_url = working_gh_remote_url
-
         clone_response = RepositoryService.clone_repo(code_input.auth, code_input.gh_remote_url, code_input.workspace)
         if 'error' in clone_response:
             return {'response': json.dumps(clone_response), 'elapsed_time': 0}
-    
+        code_input.workspace = str(code_input.workspace)
     # Push the repo
     response = await functions_and_agents_metadata.upsert_code_repository(code_inputs)
     if response != "success":
@@ -602,9 +602,9 @@ async def codeAssistantRun(code_input: CodeAssistantInput):
         return {'response': json.dumps({"error": "Github User not provided"}), 'elapsed_time': 0}
     if code_input.reqa_file and code_input.reqa_file == '':
         return {'response': json.dumps({"error": "reqa_file was empty"}), 'elapsed_time': 0}
-    if code_input.name == '':
-        return {'response': json.dumps({"error": "Code assistant name not provided!"}), 'elapsed_time': 0}
-    response = await MetaGPTService.run(code_input.auth, code_input.workspace, code_input.project_name, code_input.reqa_file, code_input.command_message)
+    if code_input.project_name == '':
+        return {'response': json.dumps({"error": "Code assistant project_name not provided!"}), 'elapsed_time': 0}
+    response = await MetaGPTService.run(code_input.auth, Path(code_input.workspace), code_input.project_name, code_input.reqa_file, code_input.command_message)
     if 'error' in response:
         return {'response': json.dumps(response), 'elapsed_time': 0}
     end = time.time()
@@ -630,7 +630,10 @@ async def execGitCommand(code_input: CodeExecInput):
         return {'response': json.dumps({"error": "workspace not provided!"}), 'elapsed_time': 0}
     if code_input.command_git_command == '':
         return {'response': json.dumps({"error": "command_git_command not provided!"}), 'elapsed_time': 0}
-    repo = GitRepository(local_path=code_input.workspace, auto_init=False)
+    try:
+        repo = git.Repo(Path(code_input.workspace), search_parent_directories=False)
+    except Exception as e:
+        return {'response': json.dumps({"error": f"Could not open Git directory: {e}"}), 'elapsed_time': 0}
     response = await RepositoryService.execute_git_command(repo, code_input.command_git_command)
     if 'error' in response:
         return {'response': json.dumps(response), 'elapsed_time': 0}
