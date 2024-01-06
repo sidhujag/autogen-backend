@@ -604,7 +604,8 @@ async def codeAssistantRun(code_input: CodeAssistantInput):
         return {'response': json.dumps({"error": "reqa_file was empty"}), 'elapsed_time': 0}
     if code_input.project_name == '':
         return {'response': json.dumps({"error": "Code assistant project_name not provided!"}), 'elapsed_time': 0}
-    response = await MetaGPTService.run(code_input.auth, Path(code_input.workspace), code_input.project_name, code_input.reqa_file, code_input.command_message)
+    service = MetaGPTService()
+    response = await service.run(code_input.auth, Path(code_input.workspace), code_input.project_name, code_input.reqa_file, code_input.command_message)
     if 'error' in response:
         return {'response': json.dumps(response), 'elapsed_time': 0}
     end = time.time()
