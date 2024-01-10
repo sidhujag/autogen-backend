@@ -407,7 +407,7 @@ async def upsertCodingAssistants(code_inputs: List[UpsertCodingAssistantInput]):
             return {'response': json.dumps({"error": "Assistant name not provided!"}), 'elapsed_time': 0}
         if code_input.description and code_input.description == '':
             return {'response': json.dumps({"error": "coding assistant description not provided!"}), 'elapsed_time': 0}
-        if code_input.repository_name == '':
+        if code_input.repository_name and code_input.repository_name == '':
             return {'response': json.dumps({"error": "Repository name not provided!"}), 'elapsed_time': 0}
     # Push the assistant
     response = await functions_and_agents_metadata.upsert_coding_assistants(code_inputs)
@@ -590,27 +590,6 @@ async def codePullRequest(code_input: CodeRequestInput):
     end = time.time()
     return {'response': response, 'elapsed_time': end-start}
 
-@app.post('/code_assistant_run/')
-async def codeAssistantRun(code_input: CodeAssistantInput):
-    """Endpoint to run code assistant."""
-    start = time.time()
-    if code_input.auth.api_key == '':
-        return {'response': json.dumps({"error": "LLM API key not provided"}), 'elapsed_time': 0}
-    if code_input.auth.gh_pat == '':
-        return {'response': json.dumps({"error": "Github PAT not provided"}), 'elapsed_time': 0}
-    if code_input.auth.gh_user == '':
-        return {'response': json.dumps({"error": "Github User not provided"}), 'elapsed_time': 0}
-    if code_input.reqa_file and code_input.reqa_file == '':
-        return {'response': json.dumps({"error": "reqa_file was empty"}), 'elapsed_time': 0}
-    if code_input.project_name == '':
-        return {'response': json.dumps({"error": "Code assistant project_name not provided!"}), 'elapsed_time': 0}
-    service = MetaGPTService()
-    response = await service.run(code_input.auth, Path(code_input.workspace), code_input.project_name, code_input.reqa_file, code_input.command_message)
-    if 'error' in response:
-        return {'response': json.dumps(response), 'elapsed_time': 0}
-    end = time.time()
-    return {'response': response, 'elapsed_time': end-start}
-
 @app.post('/web_research/')
 async def webResearch(code_input: WebResearchInput):
     """Endpoint to run code assistant."""
@@ -624,7 +603,7 @@ async def webResearch(code_input: WebResearchInput):
     return {'response': response, 'elapsed_time': end-start}
 
 @app.post('/code_execute_git_command/')
-async def execGitCommand(code_input: CodeExecInput):
+def execGitCommand(code_input: CodeExecInput):
     """Endpoint to run git cmd."""
     start = time.time()
     if code_input.workspace == '':
@@ -635,7 +614,7 @@ async def execGitCommand(code_input: CodeExecInput):
         repo = git.Repo(Path(code_input.workspace), search_parent_directories=False)
     except Exception as e:
         return {'response': json.dumps({"error": f"Could not open Git directory: {e}"}), 'elapsed_time': 0}
-    response = await RepositoryService.execute_git_command(repo, code_input.command_git_command)
+    response = RepositoryService.execute_git_command(repo, code_input.command_git_command)
     if 'error' in response:
         return {'response': json.dumps(response), 'elapsed_time': 0}
     end = time.time()

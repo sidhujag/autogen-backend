@@ -2,6 +2,7 @@ import requests
 import git
 import shutil
 import logging
+import shlex
 
 from functions_and_agents_metadata import AuthAgent
 from pathlib import Path
@@ -171,35 +172,36 @@ class RepositoryService:
     @staticmethod
     def create_github_pull_request(auth: AuthAgent, repository_name: str, title: str, body: str, head_branch: str):
         """
-        Create a pull request on GitHub, automatically detecting if it's a fork.
+        Create a pull request on GitHub, checking for existing ones first.
 
-        :param token: Personal access token for the GitHub API
-        :param repo: Repository name with owner (e.g., "fork-owner/repo")
+        :param auth: AuthAgent object containing GitHub authentication information
+        :param repository_name: Name of the repository
         :param title: Title of the pull request
         :param body: Content of the pull request
         :param head_branch: Name of the branch where your changes are implemented
         """
         repo = f"{auth.gh_user}/{repository_name}"
-        url = f"https://api.github.com/repos/{repo}"
         headers = {"Authorization": f"token {auth.gh_pat}", "Accept": "application/vnd.github.v3+json"}
 
-        # Get repository details to check if it's a fork and find the parent repo
-        repo_details = requests.get(url, headers=headers).json()
-        if 'parent' in repo_details:
-            parent_repo = repo_details['parent']['full_name']  # format: "parent-owner/repo"
-            head = f"{repo.split('/')[0]}:{head_branch}"  # format: "fork-owner:branch"
-        else:
-            parent_repo = repo
-            head = head_branch
+        # Get repository details to check if it's a fork
+        repo_details = requests.get(f"https://api.github.com/repos/{repo}", headers=headers).json()
+        parent_repo = repo_details.get('parent', {}).get('full_name', repo)
+        head = f"{auth.gh_user}:{head_branch}" if 'parent' in repo_details else head_branch
+
+        # Check for existing pull requests
+        prs_url = f"https://api.github.com/repos/{parent_repo}/pulls"
+        open_prs = requests.get(prs_url, headers=headers).json()
+        for pr in open_prs:
+            if pr['head']['label'] == head:
+                return {"response": f"Pull request already exists, URL: {pr['html_url']}"}
 
         # Create the pull request
-        pr_url = f"https://api.github.com/repos/{parent_repo}/pulls"
         pr_data = {"title": title, "body": body, "head": head, "base": "main"}
-        response = requests.post(pr_url, headers=headers, json=pr_data)
+        response = requests.post(prs_url, headers=headers, json=pr_data)
         if response.status_code == 201:
-            return f"Pull request created successfully, URL: {response.json()['html_url']}"
+            return {"response": f"Pull request created successfully, URL: {response.json()['html_url']}"}
         else:
-            return {"error": f"Failed to create pull request: {response.content}"}
+            return {"error": f"Failed to create pull request: {response.json()}"}
 
     @staticmethod
     def clone_repo(auth: AuthAgent, gh_remote_url: str, workspace: Path):
@@ -233,6 +235,13 @@ class RepositoryService:
                 if workspace.is_dir():
                     shutil.rmtree(workspace)
                 return RepositoryService.clone_repo(auth, gh_remote_url, workspace)
+             # setup docs
+            setup_docs_response = RepositoryService.setup_doc_dirs(repo, workspace)
+            if 'error' in setup_docs_response:
+                if workspace.is_dir():
+                    shutil.rmtree(workspace)
+                return RepositoryService.clone_repo(auth, gh_remote_url, workspace)
+                       
             return {"response": f"Repository was successfully cloned + authorized using a Personal Access Token to remote: {gh_remote_url}."}
         else:
             try:
@@ -258,7 +267,7 @@ class RepositoryService:
             repo = git.Repo.clone_from(repo_url, workspace)
             gitignore_filename = workspace / ".gitignore"
             if not gitignore_filename.exists():
-                ignores = ["__pycache__", ".*", "*.pyc"]
+                ignores = ["__pycache__", ".*", ".git/", ".aider*/", "*.pyc"]
                 with open(str(gitignore_filename), mode="w") as writer:
                     writer.write("\n".join(ignores))
                 repo.index.add([".gitignore"])
@@ -324,8 +333,8 @@ class RepositoryService:
     @staticmethod
     def execute_git_command(repo: git.Repo, git_command: str):
         try:
-            # Split the command string into parts
-            command_parts = git_command.split()
+            # Use shlex.split to correctly handle spaces within quotes
+            command_parts = shlex.split(git_command)
 
             # Prepend "git" if it's not the first part of the command
             if command_parts[0] != 'git':
@@ -336,3 +345,37 @@ class RepositoryService:
             return {"response": f"Git command executed successfully: {result}"}
         except Exception as e:
             return {"error": f"Error executing Git command: {e}"}
+    
+    @staticmethod
+    def setup_doc_dirs(repo: git.Repo, workspace: Path):
+        doc_files = {
+            "docs/product_management/goals.txt": "Product Goals: Outline up to three key goals for the product.\n",
+            "docs/product_management/user_stories.txt": "User Stories: Describe 3-5 scenarios highlighting user interactions with the product.\n",
+            "docs/product_management/competition.txt": "Competitive Analysis: List 5-7 competitors and analyze their offerings.\n",
+            "docs/product_management/requirements.txt": "Requirements: Detail the top 5 requirements with priorities (P0, P1, P2).\n",
+            "docs/product_management/ui_design.txt": "UI Design Draft: Describe UI elements, functions, style, and layout.\n",
+            "docs/product_management/anything_unclear.txt": "Anything UNCLEAR: Highlight unclear aspects of the project and seek clarifications.\n",
+            "docs/architect/implementation.txt": "Implementation Approach: Discuss difficult points and select appropriate frameworks.\n",
+            "docs/architect/structure.txt": "Data Structures and Interfaces: Provide detailed data structures and comprehensive API designs.\n",
+            "docs/architect/program_flow.txt": "Program Call Flow: Describe the call flow using the classes and APIs defined.\n",
+            "docs/architect/anything_unclear.txt": "Anything UNCLEAR: Address unclear aspects in the architecture and seek clarifications.\n",
+            "docs/project_management/requirements.txt": "Required Python Packages: List Python packages needed, formatted as in requirements.txt.\n",
+            "docs/project_management/third_party_packages.txt": "Required Other Language Packages: List packages for languages other than Python.\n",
+            "docs/project_management/logic_analysis.txt": "Logic Analysis: List files with classes/methods/functions and their dependencies.\n",
+            "docs/project_management/tasks.txt": "Task List: Break down tasks into filenames, prioritized by dependency order.\n",
+            "docs/project_management/api_spec.txt": "Full API Spec: Describe all APIs using OpenAPI 3.0 spec for front and back-end communication.\n",
+            "docs/project_management/shared_knowledge.txt": "Shared Knowledge: Detail shared utility functions or configuration variables.\n",
+            "docs/project_management/anything_unclear.txt": "Anything UNCLEAR: Highlight unclear aspects in project management and seek clarifications.\n"
+        }
+
+        try:
+            for filepath, content in doc_files.items():
+                full_path = workspace / filepath
+                full_path.parent.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
+                with open(full_path, "w") as file:
+                    file.write(content)
+                repo.index.add([str(full_path)])
+            repo.index.commit("Add documentation structure and files with descriptions")
+            return {"response": "Documentation directories and files setup and committed with descriptions"}
+        except Exception as e:
+            return {"error": f"Error setting up documentation directories: {e}"}

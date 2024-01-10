@@ -83,7 +83,6 @@ class CodeAssistantInput(BaseModel):
     workspace: str
     project_name: str
     command_message: str
-    reqa_file: Optional[str] = None
 
 class UpsertAgentModel(BaseModel):
     name: str
@@ -118,8 +117,8 @@ class UpsertGroupInput(BaseModel):
 
 class UpsertCodingAssistantInput(BaseModel):
     name: str
-    repository_name: str
     auth: AuthAgent
+    repository_name: Optional[str] = None
     description: Optional[str] = None
     model: Optional[str] = None
     files: Optional[List[str]] = None
@@ -186,13 +185,12 @@ class BaseGroup(BaseModel):
         
 class OpenAIParameter(BaseModel):
     type: str = "object"
-    properties: dict = Field(default_factory=dict)
+    properties: Dict[str, Any] = Field(default_factory=dict)
     required: List[str] = Field(default_factory=list)
 
 class BaseFunction(BaseModel):
     name: str
     status: str
-    last_updater: str
     description: str
     parameters: OpenAIParameter = Field(default_factory=OpenAIParameter)
     category: str
@@ -238,11 +236,10 @@ class AddFunctionModel(BaseFunction):
 class AddFunctionInput(BaseModel):
     name: str
     auth: AuthAgent
-    last_updater: str
     status: Optional[str] = None
     description: Optional[str] = None
     category: Optional[str] = None
-    class_name: str = None
+    class_name: Optional[str] = None
     parameters: OpenAIParameter = OpenAIParameter(type="object", properties={})
     function_code: Optional[str] = None
     def exclude_auth_dict(self):
@@ -420,11 +417,8 @@ class FunctionsAndAgentsMetadata:
                         return json.dumps({"error": "New functions must have either function_code or class_name defined."})
                 if existing_function and function.function_code:
                     existing_function_model = AddFunctionModel(**existing_function)
-                    # if status is changing to accepted make sure this updater is not the same as the last one
-                    if function.status == "accepted" and existing_function_model.status != "accepted" and existing_function_model.last_updater == function.last_updater:
-                        return json.dumps({"error": "A different agent must accept the function from the one that last updated the code."})
                     # if function already accepted then you must change state back to testing or development if you are updating code
-                    elif existing_function_model.status == "accepted" and not function.status and function.function_code:
+                    if existing_function_model.status == "accepted" and not function.status and function.function_code:
                         return json.dumps({"error": "Currently accepted function must change status (to either development or testing) if you are updating code."})
                     
                 function_model_data = function.exclude_auth_dict()
