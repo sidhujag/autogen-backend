@@ -110,6 +110,7 @@ class UpsertGroupInput(BaseModel):
     agents_to_add: Optional[List[str]] = None
     agents_to_remove: Optional[List[str]] = None
     locked: Optional[bool] = None
+    current_code_assistant_name: Optional[str] = None
     def exclude_auth_dict(self):
         data = self.dict(exclude={"auth"}, exclude_none=True)
         data.update(self.auth.to_dict())
@@ -176,6 +177,7 @@ class BaseGroup(BaseModel):
     outgoing: Dict[str, int] = Field(default_factory=dict)
     incoming: Dict[str, int] = Field(default_factory=dict)
     locked: Optional[bool] = Field(default=False)
+    current_code_assistant_name: str = Field(default="")
     def __init__(self, **data):
         if 'auth' not in data and 'namespace_id' in data:
             data['auth'] = {'namespace_id': data['namespace_id']}
